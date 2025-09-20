@@ -1,0 +1,5 @@
+# @see: https://docs.astral.sh/uv/concepts/indexes/#defining-an-index
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+default = true
