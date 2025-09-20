@@ -101,17 +101,17 @@ class CameraSimulatorApp:
         row += 1
 
         # 径向畸变参数
-        self.create_slider(control_frame, "径向畸变 k1", "k1", -0.001, 0.001, 0, row)
+        self.create_slider(control_frame, "径向畸变 k1", "k1", -5, 5, 0, row)
         row += 1
-        self.create_slider(control_frame, "径向畸变 k2", "k2", -0.001, 0.001, 0, row)
+        self.create_slider(control_frame, "径向畸变 k2", "k2", -5, 5, 0, row)
         row += 1
-        self.create_slider(control_frame, "径向畸变 k3", "k3", -0.001, 0.001, 0, row)
+        self.create_slider(control_frame, "径向畸变 k3", "k3", -5, 5, 0, row)
         row += 1
 
         # 切向畸变参数
-        self.create_slider(control_frame, "切向畸变 p1", "p1", -0.001, 0.001, 0, row)
+        self.create_slider(control_frame, "切向畸变 p1", "p1", -5, 5, 0, row)
         row += 1
-        self.create_slider(control_frame, "切向畸变 p2", "p2", -0.001, 0.001, 0, row)
+        self.create_slider(control_frame, "切向畸变 p2", "p2", -5, 5, 0, row)
         row += 1
 
         # 按钮框架
