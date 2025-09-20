@@ -87,9 +87,9 @@ class CameraSimulatorApp:
         row = 0
 
         # 平移参数
-        self.create_slider(control_frame, "X平移", "translation_x", -100, 100, 0, row)
+        self.create_slider(control_frame, "X平移", "translation_x", -30, 30, 0, row)
         row += 1
-        self.create_slider(control_frame, "Y平移", "translation_y", -100, 100, 0, row)
+        self.create_slider(control_frame, "Y平移", "translation_y", -30, 30, 0, row)
         row += 1
 
         # 旋转参数
