@@ -184,6 +184,7 @@ class CameraSimulatorApp:
     def load_image(self):
         """加载用户选择的图像"""
         file_path = filedialog.askopenfilename(
+            initialdir='.',
             filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.bmp;*.tiff"), ("All files", "*.*")]
         )
 
@@ -198,6 +199,7 @@ class CameraSimulatorApp:
         """保存处理后的图像"""
         file_path = filedialog.asksaveasfilename(
             defaultextension=".png",
+            initialdir='.',
             filetypes=[("PNG files", "*.png"), ("All files", "*.*")]
         )
 
