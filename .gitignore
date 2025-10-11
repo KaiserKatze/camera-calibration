@@ -1,5 +1,6 @@
 # My Project Specific
 calibration_images/
+docs/
 *.npz
 *.jpg
 *.png
