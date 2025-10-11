@@ -33,7 +33,9 @@ def correct_distortion():
         print('Failed to load image.')
         return
 
-    data = np.load('camera_calibration_params.npz')
+    data: np.lib.npyio.NpzFile = np.load('camera_calibration_params.npz')
+    print(f'{type(data)=}')
+    print('data keys=', list(data.keys()))
     camera_matrix = data['camera_matrix']
     dist_coeffs = data['dist_coeffs']
     # rvecs = data['rvecs']
@@ -47,7 +49,14 @@ def correct_distortion():
     h, w = img_original.shape[:2]
 
     # 获取优化后的新相机矩阵和ROI区域
-    new_camera_matrix, roi = cv.getOptimalNewCameraMatrix(camera_matrix, dist_coeffs, (w, h), 1, (w, h))
+    img_size = (w, h)
+    new_camera_matrix, roi = cv.getOptimalNewCameraMatrix(
+        camera_matrix,
+        dist_coeffs,
+        img_size,
+        1,
+        img_size
+    )
 
     # 校正图像
     dst = cv.undistort(img_original, camera_matrix, dist_coeffs, None, new_camera_matrix)
