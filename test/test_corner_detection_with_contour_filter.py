@@ -87,6 +87,58 @@ def get_contour_aspect_ratio(contour):
     return aspect_ratio
 
 
+# ----------------------- 新增：状态栏工具 -----------------------
+def ensure_bgr(img):
+    """确保图像是 BGR 3 通道，用于在其上绘制状态栏与文字。"""
+    if img is None:
+        return None
+    if img.ndim == 2:
+        return cv.cvtColor(img, cv.COLOR_GRAY2BGR)
+    if img.shape[2] == 4:
+        return cv.cvtColor(img, cv.COLOR_BGRA2BGR)
+    return img.copy()
+
+
+def show_image_with_statusbar(window_name, image, bar_height=24):
+    """
+    在窗口底部增加状态栏，并在鼠标位于窗口内时显示坐标。
+    注意：需要在主循环中用 waitKey(>0) 轮询，以处理鼠标事件和刷新。
+    """
+    img_bgr = ensure_bgr(image)
+    h, w = img_bgr.shape[:2]
+    canvas = np.zeros((h + bar_height, w, 3), dtype=np.uint8)
+
+    font = cv.FONT_HERSHEY_SIMPLEX
+    baseline_offset = 6  # 文字距离条带底部的像素
+
+    def render(text: str):
+        # 复制原图到画布上方
+        canvas[:h] = img_bgr
+        # 画状态条背景
+        cv.rectangle(canvas, (0, h), (w, h + bar_height), (32, 32, 32), thickness=-1)
+        # 文字
+        if text:
+            cv.putText(
+                canvas, text,
+                (5, h + bar_height - baseline_offset),
+                font, 0.5, (255, 255, 255), 1, cv.LINE_AA
+            )
+        cv.imshow(window_name, canvas)
+
+    def on_mouse(event, x, y, flags, param):
+        # 仅当鼠标在图像区域（不包括状态栏条带）内时显示坐标
+        if 0 <= x < w and 0 <= y < h:
+            render(f'x={x}, y={y}')
+        else:
+            # 鼠标不在图像区域（可能在状态栏或窗口外），清空提示
+            render('')
+
+    cv.namedWindow(window_name, cv.WINDOW_AUTOSIZE)
+    cv.setMouseCallback(window_name, on_mouse)
+    render('Move mouse to see coordinates')
+# ----------------------- 新增：状态栏工具 -----------------------
+
+
 def detect_and_filter_corners():
     path_image = askopenimagefilename()
     print(f'Opening file {path_image!r} ...')
@@ -166,12 +218,11 @@ def detect_and_filter_corners():
     contours_filtered = []
     for i, cnt in enumerate(valid_contours):
         current_area = contour_areas[i]
-        if current_area >= area_min and current_area <= area_max:
+        if area_min <= current_area <= area_max:
             contours_filtered.append(cnt)
-
     print(f'Filtered contours: {len(contours_filtered)} / {len(valid_contours)} kept.')
 
-    # 基于长宽比，进一步筛选轮廓
+    # 基于长宽比进一步筛选
     contours_filtered = [
         cnt for cnt in contours_filtered
         if .5 <= get_contour_aspect_ratio(cnt) <= 1.5
@@ -261,7 +312,8 @@ def detect_and_filter_corners():
         x, y = corner.ravel()
         cv.circle(img_with_refined_corners, (int(x), int(y)), 2, (0, 0, 255), -1)  # 蓝色实心圆
 
-    cv.imshow('Refined Corners (Red)', img_with_refined_corners)
+    show_image_with_statusbar('Refined Corners (Red)', img_with_refined_corners)
+
 
 if __name__ == '__main__':
     # 打印 python 版本、opencv 版本、numpy 版本、matplotlib 版本
@@ -274,10 +326,11 @@ if __name__ == '__main__':
     # 检测并过滤角点
     detect_and_filter_corners()
 
+    # 主循环：用小延时轮询（而不是 waitKey(0)）以处理鼠标事件并刷新状态栏
     while True:
-        key_event = 0xff & cv.waitKey(0)
+        key_event = 0xff & cv.waitKey(20)  # 20ms 轮询
         if key_event == ord('q'):
             cv.destroyAllWindows()
             exit()
         elif key_event == ord('o'):
-            detect_and_filter_corners() # 调用新函数
+            detect_and_filter_corners()  # 重新选择并处理新图像
