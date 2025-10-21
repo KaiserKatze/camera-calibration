@@ -54,7 +54,7 @@ def correct_distortion():
         camera_matrix,
         dist_coeffs,
         img_size,
-        1,
+        0,
         img_size
     )
 
@@ -89,11 +89,3 @@ if __name__ == '__main__':
 
     # 使用标定参数校正图像畸变
     correct_distortion()
-
-    while True:
-        key_event = 0xff & cv.waitKey(0)
-        if key_event == ord('q'):
-            cv.destroyAllWindows()
-            exit()
-        elif key_event == ord('o'):
-            correct_distortion() # 调用新函数

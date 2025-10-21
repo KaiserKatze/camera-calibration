@@ -3,3 +3,8 @@
 name = "tuna"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
 default = true
+
+[dependency-groups]
+dev = [
+    "scipy>=1.16.2",
+]

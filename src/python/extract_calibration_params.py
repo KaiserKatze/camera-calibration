@@ -33,7 +33,10 @@ def generate_object_points_in_world_coordinates():
                 (x_end, y_start, 0),
                 (x_end, y_end, 0),
             ])
-    return np.array(coordinates, dtype=np.float32)
+    coordinates = np.array(coordinates, dtype=np.float32)
+    # 行优先排序（先 y 后 x）
+    idx = np.lexsort((coordinates[:,0], coordinates[:,1]))
+    return coordinates[idx]
 
 
 def get_contour_aspect_ratio(contour: cv.typing.MatLike):
@@ -127,9 +130,8 @@ def merge_corners_dbscan(corners: np.ndarray, eps: float = 3.0, min_samples: int
     labels = db.labels_
 
     merged_corners = []
-    unique_labels = set(labels)
 
-    for label in unique_labels:
+    for label in np.unique(labels):
         if label == -1:  # 噪声点，通常不合并，但你可以选择保留或处理
             continue
         # 找到同一簇的所有角点
@@ -138,13 +140,10 @@ def merge_corners_dbscan(corners: np.ndarray, eps: float = 3.0, min_samples: int
         centroid = np.mean(cluster_points, axis=0)
         merged_corners.append(centroid)
 
-    # 处理噪声点（可选：保留或丢弃）
-    noise_points = corners[labels == -1]
-    if len(noise_points) > 0:
-        # 可以选择保留噪声点作为独立角点
-        merged_corners.extend(noise_points)
-
-    return np.array(merged_corners, dtype=np.float32)
+    merged_corners = np.array(merged_corners, dtype=np.float32)
+    # 关键：全局按 y 再按 x 排序，得到行优先顺序
+    idx = np.lexsort((merged_corners[:,0], merged_corners[:,1]))  # 主键 y，次键 x
+    return merged_corners[idx]
 
 
 def detect_corners(path_image):
@@ -210,6 +209,7 @@ def detect_corners(path_image):
     # 执行亚像素级角点精确化
     corners_refined = cv.cornerSubPix(img_float32, corner_points, (5,5), (-1,-1), criteria)
     corners_merged = merge_corners_dbscan(corners_refined.reshape(-1, 2), eps=3.0, min_samples=1)
+    corners_merged = corners_merged[np.lexsort((corners_merged[:, 0], corners_merged[:, 1]))]
 
     if len(corners_merged) != m * n * 4:  # 检查角点数量与预期是否一致
         print(f"角点数量 {len(corners_merged)} 不符合预期 {m*n*4}")

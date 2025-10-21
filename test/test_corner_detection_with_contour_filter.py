@@ -300,6 +300,7 @@ def detect_and_filter_corners():
     # 执行亚像素级角点精确化
     corners_refined = cv.cornerSubPix(img_float32, corner_points, (5,5), (-1,-1), criteria)
     corners_merged = merge_corners_dbscan(corners_refined.reshape(-1, 2), eps=3.0, min_samples=1)
+    corners_merged = corners_merged[np.lexsort((corners_merged[:, 0], corners_merged[:, 1]))]
 
     # 4. 打印或保存角点坐标
     print(f"检测到 {len(corners_merged)} 个角点")
