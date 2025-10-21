@@ -6,12 +6,13 @@ import itertools
 import typing
 
 import numpy as np
+import scipy.optimize
 
 
 np.set_printoptions(linewidth=np.inf)
 
 
-class Calibrator:
+class NotCalibrator:
     def __init__(self, model: np.ndarray, pixel: np.ndarray):
         model_h, model_w = model.shape
         pixel_h, pixel_w = pixel.shape
@@ -21,6 +22,7 @@ class Calibrator:
         assert pixel_w == 2, '必须输入影像的非齐次坐标'
         self.model = model
         self.pixel = pixel
+
         z = np.zeros(4)
         P = np.block(
             list(
@@ -105,6 +107,36 @@ class Calibrator:
         print(f'{T=}')
 
 
+class RadialCalibrator:
+    @staticmethod
+    def make_matrix_L(model: np.ndarray, pixel: np.ndarray):
+        model_h, model_w = model.shape
+        pixel1 = pixel @ np.array([
+            [0, 1],
+            [-1, 0],
+        ])
+        out = np.empty((model_h, 2 * model_w), dtype=np.result_type(model.dtype, pixel.dtype))
+        np.multiply(model, pixel1[:, :1], out=out[:, :model_w])
+        np.multiply(model, pixel1[:, 1:2], out=out[:, model_w:])
+        return out
+
+    def __init__(self, model: np.ndarray, pixel: np.ndarray):
+        model_h, model_w = model.shape
+        pixel_h, pixel_w = pixel.shape
+        assert model_h == pixel_h, f'模型点、像点数量不相等: 模型点数量={model_h}, 像点数量={pixel_h}'
+        assert pixel_h > 6, f'样本点数量太少: {pixel_h}'
+        assert model_w == 4, '必须输入模型的齐次坐标'
+        assert pixel_w == 2, '必须输入影像的非齐次坐标'
+
+        L = self.make_matrix_L(model, pixel)
+        _, _, V = np.linalg.svd(L, full_matrices=True, compute_uv=True, hermitian=False)
+        m = V[:, -1]
+        assert len(m) == 8
+        M_without_m3 = m.reshape((2, 4))  # 只有 m1, m2, 没有 m3
+        # print(f'{L=}')
+        print(f'{M_without_m3=}')
+
+
 if __name__ == '__main__':
     # 定义常量参数
     m = 8  # 网格行数
@@ -133,4 +165,4 @@ if __name__ == '__main__':
     model = np.array(model, dtype=np.float64)
     pixel = model[:, 0:2]
 
-    Calibrator(model, pixel)
+    RadialCalibrator(model, pixel)
