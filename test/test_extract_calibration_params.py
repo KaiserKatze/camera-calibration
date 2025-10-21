@@ -7,28 +7,20 @@ import typing
 
 import numpy as np
 
-type ListOf3DPoints = typing.List[typing.Tuple[float, float, float, float]]
-type ListOf2DPoints = typing.List[typing.Tuple[float, float]]
-
 
 np.set_printoptions(linewidth=np.inf)
 
 
-class Model:
-    def __init__(self, world_coordinates: ListOf3DPoints):
-        self.world_coordinates = np.array(world_coordinates)
-
-
-class Pixel:
-    def __init__(self, pixel_coordinates: ListOf2DPoints):
-        self.pixel_coordinates = np.array(pixel_coordinates)
-
-
 class Calibrator:
-    def __init__(self, model: Model, pixel: Pixel):
-        self.model = model.world_coordinates
-        self.pixel = pixel.pixel_coordinates
-        # assert len(self.model) == len(self.pixel) > 6
+    def __init__(self, model: np.ndarray, pixel: np.ndarray):
+        model_h, model_w = model.shape
+        pixel_h, pixel_w = pixel.shape
+        assert model_h == pixel_h, f'模型点、像点数量不相等: 模型点数量={model_h}, 像点数量={pixel_h}'
+        assert pixel_h > 6, f'样本点数量太少: {pixel_h}'
+        assert model_w == 4, '必须输入模型的齐次坐标'
+        assert pixel_w == 2, '必须输入影像的非齐次坐标'
+        self.model = model
+        self.pixel = pixel
         z = np.zeros(4)
         P = np.block(
             list(
@@ -104,7 +96,7 @@ class Calibrator:
         r3 = a3 / a3_norm
         r2 = np.cross(r3, r1)
         R = np.concat([r1, r2, r3]).reshape((3, 3))
-        T = rho * (np.linalg.inv(K) @ b)
+        T = rho * (np.linalg.pinv(K) @ b)
         # print(f'{r1=}')
         # print(f'{r2=}')
         # print(f'{r3=}')
@@ -114,14 +106,31 @@ class Calibrator:
 
 
 if __name__ == '__main__':
-    A = [
-        (1,2),
-        (3,4),
-    ]
+    # 定义常量参数
+    m = 8  # 网格行数
+    n = 8  # 网格列数
+    a = 25  # 每个黑色正方形的边长（像素）
+    b = 30  # 相邻正方形之间的间距（像素）
+    c = 50  # 正方形与图片边缘的最小距离（像素）
 
-    B = [
-        (1,2,3,1),
-        (3,4,5,1),
-    ]
+    model = []
+    for i in range(m):
+        for j in range(n):
+            # 计算当前正方形的左上角坐标
+            x_start = c + j * (a + b)
+            y_start = c + i * (a + b)
 
-    Calibrator(Model(B), Pixel(A))
+            # 计算当前正方形的右下角坐标
+            x_end = x_start + a
+            y_end = y_start + a
+
+            model.extend([
+                (x_start, y_start, 0, 1),
+                (x_start, y_end, 0, 1),
+                (x_end, y_start, 0, 1),
+                (x_end, y_end, 0, 1),
+            ])
+    model = np.array(model, dtype=np.float64)
+    pixel = model[:, 0:2]
+
+    Calibrator(model, pixel)
