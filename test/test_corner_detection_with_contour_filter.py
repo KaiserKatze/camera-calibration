@@ -87,6 +87,101 @@ def get_contour_aspect_ratio(contour):
     return aspect_ratio
 
 
+# ----------------------- 新增：基于质心的邻域/网格密排筛选 -----------------------
+def _contour_centroid(contour):
+    """
+    计算轮廓的几何中心（重心）。若 moments['m00'] == 0，退化到 boundingRect center。
+    返回 (x, y) 浮点坐标。
+    """
+    M = cv.moments(contour)
+    if abs(M.get('m00', 0)) > 1e-12:
+        cx = M['m10'] / M['m00']
+        cy = M['m01'] / M['m00']
+    else:
+        x, y, w, h = cv.boundingRect(contour)
+        cx = x + w / 2.0
+        cy = y + h / 2.0
+    return np.array([cx, cy], dtype=np.float32)
+
+
+def filter_contours_by_centroid_proximity(contours, eps_multiplier=1.5, min_neighbors=2):
+    """
+    新增的轮廓筛选：基于轮廓质心的邻域密度与簇聚合来筛除孤立或不按网格排列的轮廓。
+    策略：
+      1. 计算每个轮廓的质心，得到 Nx2 数组。
+      2. 计算每个点的最近邻距离，并取中位数 median_nn 作为参考网格间距。
+      3. 用 DBSCAN(eps = eps_multiplier * median_nn) 找到主簇（最大簇），先保留主簇内点。
+      4. 对于主簇内的点，再计算局部邻居数（半径 = 1.2*median_nn），要求邻居至少为 min_neighbors（排除自身）。
+      5. 返回满足条件的轮廓列表（顺序与输入保持一致）。
+    参数说明：
+      - eps_multiplier: 用于 DBSCAN eps 的倍数（默认 1.5，越大更宽松）
+      - min_neighbors: 局部邻居最少数量阈值（默认 2，表示需要至少两个近邻）
+    """
+    n = len(contours)
+    if n == 0:
+        return contours
+
+    # 计算质心数组
+    centroids = np.array([_contour_centroid(cnt) for cnt in contours], dtype=np.float32)  # shape (n,2)
+
+    # 如果数据点太少，直接返回（避免无法估计网格间距）
+    if n <= min_neighbors:
+        return contours
+
+    # 计算两两距离矩阵（留意不要太大，通常轮廓数量不会非常大）
+    diffs = centroids[:, None, :] - centroids[None, :, :]  # shape (n,n,2)
+    dists = np.linalg.norm(diffs, axis=2)  # shape (n,n)
+
+    # 对角线是 0（自己），找到每个点的最近非零邻居距离
+    # 为稳健，若某行除了自己全部为零（不太可能）则用很小值避免异常
+    nn_dists = []
+    for i in range(n):
+        row = dists[i]
+        # 排除自身距离为0
+        nonzero = row[row > 1e-12]
+        if nonzero.size == 0:
+            nn = 1.0  # 退化情况
+        else:
+            nn = np.min(nonzero)
+        nn_dists.append(nn)
+    nn_dists = np.array(nn_dists, dtype=np.float32)
+
+    # 参考网格间距：取中位数，稳健对抗异常点
+    median_nn = float(np.median(nn_dists))
+    if median_nn <= 1e-6:
+        # 如果中位数过小，说明点几乎重合或数据异常，这种情况下只保留全部以避免误筛
+        return contours
+
+    # 使用 DBSCAN 找到主簇（密排的一组质心）
+    db_eps = eps_multiplier * median_nn
+    db = DBSCAN(eps=db_eps, min_samples=1).fit(centroids)
+    labels = db.labels_  # -1 表示噪声
+    unique_labels, counts = np.unique(labels[labels >= 0], return_counts=True)
+    if len(unique_labels) == 0:
+        # 没找到主簇，退化为保留全部
+        return contours
+
+    main_label = unique_labels[np.argmax(counts)]
+    in_main_cluster = (labels == main_label)
+
+    # 局部邻居计数（在 radius = 1.2 * median_nn 范围内）
+    local_radius = 1.2 * median_nn
+    neighbor_counts = (dists <= local_radius).sum(axis=1) - 1  # 减去自身
+    locally_dense = neighbor_counts >= min_neighbors
+
+    # 最终条件：既属于主簇，又局部密度足够
+    keep_mask = in_main_cluster & locally_dense
+
+    # 如果筛掉过多（例如主簇数量非常少导致全部被剔除），则退化到只用主簇判断
+    if keep_mask.sum() == 0:
+        keep_mask = in_main_cluster
+
+    # 构建返回的轮廓列表（保持原输入顺序）
+    filtered = [cnt for keep, cnt in zip(keep_mask, contours) if keep]
+    return filtered
+# ----------------------- 新增结束 -----------------------
+
+
 # ----------------------- 新增：状态栏工具 -----------------------
 def ensure_bgr(img):
     """确保图像是 BGR 3 通道，用于在其上绘制状态栏与文字。"""
@@ -233,6 +328,15 @@ def detect_and_filter_corners():
     # 如果筛选后无轮廓，退出
     if len(contours_filtered) == 0:
         print("No contours left after aspect ratio filtering.")
+
+    # 通过质心的局部密度与主簇判断，去除孤立或未紧密排列的轮廓
+    contours_before_centroid_filter = len(contours_filtered)
+    contours_filtered = filter_contours_by_centroid_proximity(
+        contours_filtered,
+        eps_multiplier=1.5,   # DBSCAN eps = 1.5 * median_nn（可调整）
+        min_neighbors=2       # 局部邻居至少 2 个（可调整）
+    )
+    print(f'After centroid-proximity filtering: {len(contours_filtered)} / {contours_before_centroid_filter} kept.')
 
     # 8. 绘制过滤后的角点区域（用绿色轮廓表示）
     # 首先创建一个空白图像用于绘制轮廓
