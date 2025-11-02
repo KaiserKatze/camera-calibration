@@ -109,8 +109,8 @@ def filter_contours_by_centroid_proximity(contours, eps_multiplier=1.5, min_neig
     新增的轮廓筛选：基于轮廓质心的邻域密度与簇聚合来筛除孤立或不按网格排列的轮廓。
     策略：
       1. 计算每个轮廓的质心，得到 Nx2 数组。
-      2. 计算每个点的最近邻距离，并取中位数 median_nn 作为参考网格间距。
-      3. 用 DBSCAN(eps = eps_multiplier * median_nn) 找到主簇（最大簇），先保留主簇内点。
+      2. 计算每个质心的最近邻距离，并取中位数 median_nn 作为参考网格间距。
+      3. 用 DBSCAN(eps = eps_multiplier * median_nn) 找到主簇（密集排列的一组质心），保留属于主簇的轮廓。
       4. 对于主簇内的点，再计算局部邻居数（半径 = 1.2*median_nn），要求邻居至少为 min_neighbors（排除自身）。
       5. 返回满足条件的轮廓列表（顺序与输入保持一致）。
     参数说明：
@@ -179,6 +179,136 @@ def filter_contours_by_centroid_proximity(contours, eps_multiplier=1.5, min_neig
     # 构建返回的轮廓列表（保持原输入顺序）
     filtered = [cnt for keep, cnt in zip(keep_mask, contours) if keep]
     return filtered
+# ----------------------- 新增结束 -----------------------
+
+
+# ----------------------- 新增：将不规则轮廓重建为平滑的四边形并返回角点 -----------------------
+def _angle_between_vectors(v1, v2):
+    """返回两个向量夹角（弧度）"""
+    dot = v1.dot(v2)
+    nv = np.linalg.norm(v1) * np.linalg.norm(v2)
+    if nv <= 1e-12:
+        return 0.0
+    cosv = np.clip(dot / nv, -1.0, 1.0)
+    return np.arccos(cosv)
+
+
+def _is_near_rect(polygon, angle_tol_deg=20, aspect_tol=0.5):
+    """
+    判断给定 4-点 polygon 是否近似矩形（角度接近 90°、长宽比接近 1）
+    polygon: 4x2 array or list of 4 points in order
+    """
+    pts = np.array(polygon, dtype=np.float32).reshape(-1, 2)
+    if pts.shape[0] != 4:
+        return False
+    # 计算边向量并判断夹角
+    angles = []
+    for i in range(4):
+        a = pts[(i+1) % 4] - pts[i]
+        b = pts[(i-1) % 4] - pts[i]
+        ang = _angle_between_vectors(a, b)
+        angles.append(np.degrees(ang))
+    # 每个角应接近 90°
+    angles = np.array(angles)
+    if np.any(np.abs(angles - 90.0) > angle_tol_deg):
+        return False
+    # 长宽比
+    rect = cv.minAreaRect(pts)
+    (w, h) = rect[1]
+    if min(w, h) <= 0:
+        return False
+    ar = max(w, h) / min(w, h)
+    # 允许一定宽松度：aspect_tol = 0.5 -> ar <= 1+0.5 =1.5
+    if ar > 1.0 + aspect_tol:
+        return False
+    return True
+
+
+def simplify_and_reconstruct_mask(contours_filtered, image_shape, area_threshold_min=50, area_threshold_max=1e8):
+    """
+    对筛选后的轮廓做几何重构，尝试将每个轮廓转换为 4 个顶点的四边形（若可能）。
+    返回：
+      - mask_final: 二值 mask（uint8，0/255），轮廓区域为黑（0），背景为白（255）
+      - quad_corners_list: 列表，每项是一个 4x2 的 float32 数组（四边形顶点）
+    实现要点：
+      1. 在原始 filled mask 基础上先做形态学平滑（closing/opening）和中值滤波。
+      2. 对每个轮廓尝试 approxPolyDP (eps = 0.02 * perimeter)；若得到 4 点且近矩形 -> 接受。
+      3. 否则用 minAreaRect 得到 box，若 aspect ratio 与面积合理 -> 接受 box 顶点。
+      4. 将所有接受的四边形绘制到 mask 上（填充），并返回它们的顶点列表。
+    """
+    h, w = image_shape[1], image_shape[0]  # image_shape is (width, height)
+    mask_initial = np.zeros((h, w), dtype=np.uint8)
+    cv.drawContours(mask_initial, contours_filtered, -1, 255, cv.FILLED)
+
+    # 形态学平滑：先 closing（结构化元素大小依据图像尺度选择）
+    diag = int(np.sqrt(h * h + w * w))
+    # kernel_size 与图像尺寸关联，限制范围
+    k = max(3, min(21, int(round(min(h, w) / 200))))  # 例如图像最小边/200
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (k, k))
+    mask_closed = cv.morphologyEx(mask_initial, cv.MORPH_CLOSE, kernel, iterations=1)
+    mask_opened = cv.morphologyEx(mask_closed, cv.MORPH_OPEN, kernel, iterations=1)
+    mask_smoothed = cv.medianBlur(mask_opened, k if k % 2 == 1 else k+1)
+
+    # 重新提取轮廓（在平滑后的 mask 上）
+    contours2, _ = cv.findContours(mask_smoothed, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    quad_corners_list = []
+    mask_final = np.full_like(mask_smoothed, 255, dtype=np.uint8)  # 背景白
+    # 先清空 mask_final（我们将填充四边形为黑色）
+    mask_final[:] = 255
+
+    for cnt in contours2:
+        area = cv.contourArea(cnt)
+        if not (area_threshold_min <= area <= area_threshold_max):
+            continue
+
+        peri = cv.arcLength(cnt, True)
+        # 先尝试多边形逼近
+        eps = max(1.0, 0.02 * peri)
+        approx = cv.approxPolyDP(cnt, eps, True)
+
+        accepted_quad = None
+        # 1) 如果逼近后是 4 点并且近似矩形，直接用它
+        if approx is not None and len(approx) == 4:
+            pts = approx.reshape(4, 2)
+            if _is_near_rect(pts, angle_tol_deg=25, aspect_tol=0.7):
+                accepted_quad = pts.astype(np.float32)
+
+        # 2) 否则尝试 convex hull + approx
+        if accepted_quad is None:
+            hull = cv.convexHull(cnt)
+            peri2 = cv.arcLength(hull, True)
+            eps2 = max(1.0, 0.03 * peri2)
+            approx2 = cv.approxPolyDP(hull, eps2, True)
+            if approx2 is not None and len(approx2) == 4:
+                pts2 = approx2.reshape(4, 2)
+                if _is_near_rect(pts2, angle_tol_deg=30, aspect_tol=1.0):
+                    accepted_quad = pts2.astype(np.float32)
+
+        # 3) 仍然没有，使用 minAreaRect（稳定的后备）
+        if accepted_quad is None:
+            rect = cv.minAreaRect(cnt)
+            box = cv.boxPoints(rect)  # 4x2 float
+            box = np.array(box, dtype=np.float32)
+            (bw, bh) = rect[1]
+            if min(bw, bh) > 1.0:
+                ar = max(bw, bh) / max(1.0, min(bw, bh))
+                # 若长宽比不是极端值，则接受
+                if ar <= 2.5:
+                    accepted_quad = box
+
+        # 4) 如果 accepted_quad 有效，则在 mask_final 上填充四边形并记录顶点
+        if accepted_quad is not None:
+            cv.fillPoly(mask_final, [accepted_quad.astype(np.int32)], 0)  # 填充为黑色
+            # 规范化顶点顺序为凸四边形顺时针（使后续排序稳定）
+            rect = cv.minAreaRect(accepted_quad.astype(np.float32))
+            box = cv.boxPoints(rect)
+            quad_corners_list.append(np.array(box, dtype=np.float32))
+        else:
+            # 无法恢复为 quad 的轮廓：作为保守策略，把该轮廓直接在 mask_final 上填充（以避免误丢）
+            cv.drawContours(mask_final, [cnt], -1, 0, cv.FILLED)
+
+    return mask_final, quad_corners_list
 # ----------------------- 新增结束 -----------------------
 
 
@@ -329,6 +459,7 @@ def detect_and_filter_corners():
     if len(contours_filtered) == 0:
         print("No contours left after aspect ratio filtering.")
 
+    # ----------------- 插入：基于质心密排的进一步筛选 -----------------
     # 通过质心的局部密度与主簇判断，去除孤立或未紧密排列的轮廓
     contours_before_centroid_filter = len(contours_filtered)
     contours_filtered = filter_contours_by_centroid_proximity(
@@ -337,6 +468,23 @@ def detect_and_filter_corners():
         min_neighbors=2       # 局部邻居至少 2 个（可调整）
     )
     print(f'After centroid-proximity filtering: {len(contours_filtered)} / {contours_before_centroid_filter} kept.')
+    # ----------------- 插入结束 -----------------
+
+    # ----------------- 插入：几何重建并得到四边形顶点（优先使用这些几何角点） -----------------
+    # 通过几何重建（approxPolyDP / minAreaRect / convexHull）把不规则轮廓恢复为四边形，构建更整洁的 mask
+    image_shape = img_grayscale.shape[::-1]  # (width, height)
+    mask_reconstructed, quad_corners_list = simplify_and_reconstruct_mask(contours_filtered, image_shape)
+    cv.imshow('Reconstructed Mask', mask_reconstructed)
+
+    # 如果得到了四边形顶点，就优先用这些顶点作为角点候选
+    final_corner_candidates = []
+    for quad in quad_corners_list:
+        # quad is 4x2 array (float). 先对四点排序（按 y 再按 x）或者以某种稳定顺序保存
+        # 但是为了后续 cornerSubPix，我们希望每个点是 (x,y)
+        for p in quad:
+            final_corner_candidates.append([p[0], p[1]])
+    final_corner_candidates = np.array(final_corner_candidates, dtype=np.float32)
+    # ----------------- 插入结束 -----------------
 
     # 8. 绘制过滤后的角点区域（用绿色轮廓表示）
     # 首先创建一个空白图像用于绘制轮廓
@@ -357,7 +505,24 @@ def detect_and_filter_corners():
     img_float32 = np.float32(img_normalized)
     cv.imshow('Normalized float', img_float32)
 
-    # 1. 使用Harris角点检测
+    # 如果我们有 quad 提供的角点候选，优先使用这些候选并做亚像素精化
+    corners_refined_from_quads = None
+    if final_corner_candidates is not None and final_corner_candidates.size > 0:
+        # 去重/合并靠得非常近的候选点（避免重复）
+        merged = merge_corners_dbscan(final_corner_candidates, eps=4.0, min_samples=1)
+        # 对每个点执行亚像素精化
+        # 定义终止条件：最大迭代30次或精度达到0.01
+        criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.01)
+        try:
+            corners_refined_from_quads = cv.cornerSubPix(img_float32, merged.reshape(-1,1,2), (5,5), (-1,-1), criteria)
+            # cornerSubPix returns Nx1x2, 将其reshape为 Nx2
+            corners_refined_from_quads = corners_refined_from_quads.reshape(-1, 2)
+        except Exception as e:
+            # 在某些异常情况下 cornerSubPix 可能失败（例如点在边界上），回退为原始 merged
+            print('cornerSubPix on quad points failed, using merged points. Error:', e)
+            corners_refined_from_quads = merged
+
+    # 1. 使用Harris角点检测（作为补充，仅当 quad 方法无覆盖时）
     dst = cv.cornerHarris(
         img_float32,
         blockSize=5,  # 处理角点时考虑的邻域大小
@@ -398,13 +563,37 @@ def detect_and_filter_corners():
     # 转换为NumPy数组以便后续处理
     corner_points = np.array(corner_points, dtype=np.float32)
 
-    # 3. (可选但推荐) 亚像素角点精确化
+    # 3. (可选但推荐) 亚像素角点精确化（对 Harris 点）
     # 定义终止条件：最大迭代30次或精度达到0.01
     criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.01)
-    # 执行亚像素级角点精确化
-    corners_refined = cv.cornerSubPix(img_float32, corner_points, (5,5), (-1,-1), criteria)
-    corners_merged = merge_corners_dbscan(corners_refined.reshape(-1, 2), eps=3.0, min_samples=1)
-    corners_merged = corners_merged[np.lexsort((corners_merged[:, 0], corners_merged[:, 1]))]
+    # 执行亚像素级角点精确化（仅在 Harris 点存在时）
+    corners_refined_from_harris = None
+    if corner_points.size > 0:
+        try:
+            corners_refined_from_harris = cv.cornerSubPix(img_float32, corner_points.reshape(-1,1,2), (5,5), (-1,-1), criteria)
+            corners_refined_from_harris = corners_refined_from_harris.reshape(-1, 2)
+        except Exception as e:
+            print('cornerSubPix on Harris points failed, using raw Harris points. Error:', e)
+            corners_refined_from_harris = corner_points
+
+    # 合并两套角点（以 quad 提取的角点优先，Harris 点补充），并去重（DBSCAN）
+    merged_candidates = []
+    if corners_refined_from_quads is not None and len(corners_refined_from_quads) > 0:
+        merged_candidates.extend(corners_refined_from_quads.tolist())
+    if corners_refined_from_harris is not None and len(corners_refined_from_harris) > 0:
+        merged_candidates.extend(corners_refined_from_harris.tolist())
+
+    merged_candidates = np.array(merged_candidates, dtype=np.float32) if merged_candidates else np.empty((0,2), dtype=np.float32)
+    if merged_candidates.size == 0:
+        print('No corner candidates found by either quad reconstruction or Harris.')
+        corners_merged = np.empty((0,2), dtype=np.float32)
+    else:
+        # 使用 DBSCAN 合并非常接近的角点（以像素为单位 eps）
+        corners_merged = merge_corners_dbscan(merged_candidates, eps=4.0, min_samples=1)
+        # 全局按 y 再按 x 排序，得到行优先顺序
+        if len(corners_merged) > 0:
+            idx = np.lexsort((corners_merged[:,0], corners_merged[:,1]))
+            corners_merged = corners_merged[idx]
 
     # 4. 打印或保存角点坐标
     print(f"检测到 {len(corners_merged)} 个角点")
@@ -415,7 +604,7 @@ def detect_and_filter_corners():
     img_with_refined_corners = img_original.copy()
     for corner in corners_merged:
         x, y = corner.ravel()
-        cv.circle(img_with_refined_corners, (int(x), int(y)), 2, (0, 0, 255), -1)  # 蓝色实心圆
+        cv.circle(img_with_refined_corners, (int(round(x)), int(round(y))), 3, (0, 0, 255), -1)  # 红色实心圆
 
     show_image_with_statusbar('Refined Corners (Red)', img_with_refined_corners)
 
