@@ -8,6 +8,9 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 from sklearn.cluster import DBSCAN  # 用于聚类分析
+import itertools
+import math
+import time
 
 
 def askopenimagefilename():
@@ -16,6 +19,49 @@ def askopenimagefilename():
         initialdir='./calibration_images',
         filetypes=[('Image files', '*.png;*.jpg;*.jpeg;*.bmp;*.tiff'), ('All files', '*.*')],
     )
+
+
+
+def askopenimagefilename():
+    """
+    稳健的文件选择。优先使用 tkinter 弹出对话框（并隐藏 root 窗口），
+    若 tkinter 不可用或用户取消，则回退到命令行输入（避免假死）。
+    """
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as e:
+        # tkinter 不可用（可能 headless），回退到命令行输入
+        print("tkinter not available or failed to import:", e)
+        path = input("Enter image path (or leave blank to cancel): ").strip()
+        return path
+
+    # 确保在主线程中运行（tkinter 要在主线程里使用）
+    try:
+        root = tk.Tk()
+        root.withdraw()      # 隐藏主窗口
+        # 有时需要 update 以确保对话框正常弹出和聚焦
+        root.update_idletasks()
+        # 弹出对话框（阻塞直到用户选择或取消）
+        path = filedialog.askopenfilename(
+            title='select an image file to open',
+            initialdir='./calibration_images',
+            filetypes=[('Image files', '*.png;*.jpg;*.jpeg;*.bmp;*.tiff'), ('All files', '*.*')],
+        )
+        # 销毁 root，释放资源
+        root.destroy()
+    except Exception as e:
+        # 在某些环境下（远程会话、无显示）tkinter 可能抛错或阻塞，
+        # 回退到命令行输入，避免脚本看似“freeze”
+        print("tkinter filedialog failed (maybe headless or not main thread):", e)
+        path = input("Enter image path (or leave blank to cancel): ").strip()
+
+    if not path:
+        # 如果用户在 GUI 中点击 Cancel 或输入为空，给出提示并回退命令行输入（可按需改）
+        print("No file selected via dialog.")
+        path = input("Enter image path (or leave blank to cancel): ").strip()
+
+    return path
 
 
 def plot_histogram_of_area_of_contours(list_of_contours, min_area=0, max_area=1000):
@@ -312,6 +358,260 @@ def simplify_and_reconstruct_mask(contours_filtered, image_shape, area_threshold
 # ----------------------- 新增结束 -----------------------
 
 
+# ----------------------- 新增：最小面积任意四边形（角度枚举 + 半平面交） -----------------------
+
+def _halfplane_intersection_polygon(halfplanes, bbox=None):
+    """
+    halfplanes: list of (n, h) 代表n·x <= h, 其中 n 是单位法向量 (2,), h scalar。
+    返回半平面交的多边形（顺时针或逆时针），以 np.float32 (k,2) 形式。
+    实现：使用 Sutherland–Hodgman 多边形裁剪。以一个大矩形为初始多边形 (bbox)。
+    bbox: 可选初始边界 (xmin, ymin, xmax, ymax)，若 None 则使用为 halfplanes 中 h 的范围扩展。
+    """
+    # 初始多边形：用给定 bbox 或者根据 halfplanes 求一个足够大的矩形
+    if bbox is None:
+        # 找到 halfplanes 的 h 範圍与法向量方向，构造一个包含原点的较大方形
+        # 更稳妥：取常数边界
+        M = 1e6
+        poly = np.array([[-M, -M], [M, -M], [M, M], [-M, M]], dtype=np.float64)
+    else:
+        xmin, ymin, xmax, ymax = bbox
+        poly = np.array([[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax]], dtype=np.float64)
+
+    def clip_polygon_by_halfplane(poly_pts, n, h):
+        """
+        poly_pts: Nx2 numpy (float64)
+        halfplane: n·x <= h
+        返回裁剪后的多边形点列表 (可能为空)
+        """
+        if poly_pts is None or len(poly_pts) == 0:
+            return np.zeros((0,2), dtype=np.float64)
+        new_pts = []
+        m = len(poly_pts)
+        for i in range(m):
+            P = poly_pts[i]
+            Q = poly_pts[(i+1) % m]
+            vP = float(h - (n[0]*P[0] + n[1]*P[1]))  # >=0 means inside
+            vQ = float(h - (n[0]*Q[0] + n[1]*Q[1]))
+            insideP = vP >= -1e-9
+            insideQ = vQ >= -1e-9
+            if insideP and insideQ:
+                # 两点都在内部，保留 Q
+                new_pts.append(Q.copy())
+            elif insideP and (not insideQ):
+                # P in, Q out -> 添加交点
+                # param t in [0,1] where P + t*(Q-P) is on boundary: n·(P+t*(Q-P)) = h
+                denom = n[0]*(Q[0]-P[0]) + n[1]*(Q[1]-P[1])
+                if abs(denom) < 1e-12:
+                    # 平行且 Q outside，忽略
+                    continue
+                t = (h - (n[0]*P[0] + n[1]*P[1])) / denom
+                t = np.clip(t, 0.0, 1.0)
+                I = P + t*(Q-P)
+                new_pts.append(I)
+            elif (not insideP) and insideQ:
+                # P out, Q in -> 添加交点，然后 Q
+                denom = n[0]*(Q[0]-P[0]) + n[1]*(Q[1]-P[1])
+                if abs(denom) < 1e-12:
+                    new_pts.append(Q.copy())
+                else:
+                    t = (h - (n[0]*P[0] + n[1]*P[1])) / denom
+                    t = np.clip(t, 0.0, 1.0)
+                    I = P + t*(Q-P)
+                    new_pts.append(I)
+                    new_pts.append(Q.copy())
+            else:
+                # both out -> nothing
+                continue
+        if len(new_pts) == 0:
+            return np.zeros((0,2), dtype=np.float64)
+        return np.array(new_pts, dtype=np.float64)
+
+    poly_pts = poly
+    for (n, h) in halfplanes:
+        poly_pts = clip_polygon_by_halfplane(poly_pts, n, h)
+        if poly_pts.size == 0:
+            break
+    return np.array(poly_pts, dtype=np.float32)
+
+
+def approximate_min_area_enclosing_quadrilateral(points, angle_step_deg=3):
+    """
+    近似寻找任意四边形（四条支持直线对应四个半平面交）最小的包含四边形。
+    方法：
+      - 对角度空间 [0, pi) 以 angle_step_deg 等分，取生成法向量 n(theta)。
+      - 枚举角度序列 a<b<c<d（组合），对每个角度集合构造半平面 n_i·x <= h_i (h_i = max p·n_i)
+      - 求这四个半平面的交多边形（使用半平面交 via 多边形裁剪），计算面积
+      - 记录最小面积的交多边形，返回其顶点（如果没有找到，返回凸包的 minAreaRect 退化结果）
+    复杂度：C(T,4) 个组合，T = 180/angle_step_deg，angle_step_deg 可调（3 或 2 或 1）
+    """
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if pts.shape[0] == 0:
+        raise ValueError("points empty")
+    if pts.shape[0] == 1:
+        x, y = pts[0]
+        return np.array([[x-1,y-1],[x+1,y-1],[x+1,y+1],[x-1,y+1]], dtype=np.float32)
+
+    # 先取凸包（减少点数，提高稳定性）
+    hull = cv.convexHull(pts.astype(np.float32)).astype(np.float64).reshape(-1, 2)
+    if hull.shape[0] < 1:
+        hull = pts
+
+    # 采样角度
+    angle_list = np.arange(0.0, 180.0, angle_step_deg)  # degrees, [0,180)
+    thetas = np.deg2rad(angle_list)  # radians
+    normals = np.column_stack([np.cos(thetas), np.sin(thetas)])  # shape (T,2)
+
+    # 预计算每个 normal 的 h = max p·n
+    h_vals = np.dot(hull, normals.T).max(axis=0)  # shape (T,)
+
+    best_area = float('inf')
+    best_poly = None
+    best_normals = None
+    best_hs = None
+
+    T = normals.shape[0]
+    # 枚举组合（a<b<c<d）
+    # 为减小组合数，我们先生成索引组合
+    idxs = range(T)
+    combos = itertools.combinations(idxs, 4)
+    # 计时显示
+    start = time.time()
+    checked = 0
+    for (i1, i2, i3, i4) in combos:
+        n1 = normals[i1]
+        n2 = normals[i2]
+        n3 = normals[i3]
+        n4 = normals[i4]
+        h1 = float(h_vals[i1])
+        h2 = float(h_vals[i2])
+        h3 = float(h_vals[i3])
+        h4 = float(h_vals[i4])
+
+        halfplanes = [(n1, h1), (n2, h2), (n3, h3), (n4, h4)]
+        poly = _halfplane_intersection_polygon(halfplanes)
+        checked += 1
+        if poly is None or poly.size == 0:
+            continue
+        # poly 可能有 >4 顶点（如果四个半平面并非角度互补），但它是包含点集的凸多边形
+        # 我们取其面积作为候选
+        area = 0.0
+        if len(poly) >= 3:
+            # polygon area shoelace
+            x = poly[:,0]
+            y = poly[:,1]
+            area = 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+        if area < best_area and area > 1e-9:
+            best_area = area
+            best_poly = poly.copy()
+            best_normals = (n1, n2, n3, n4)
+            best_hs = (h1, h2, h3, h4)
+    elapsed = time.time() - start
+    # print(f'Checked combinations: {checked}, elapsed {elapsed:.2f}s, best_area={best_area}')
+    if best_poly is None:
+        # 退化：用 minAreaRect 的 box 顶点
+        rect = cv.minAreaRect(hull.astype(np.float32))
+        box = cv.boxPoints(rect)
+        return np.array(box, dtype=np.float32)
+    # 为了尽量返回四点表示：如果 best_poly 有多于4个顶点，可以用凸包再用 approxPolyDP
+    if best_poly.shape[0] > 4:
+        hull2 = cv.convexHull(best_poly.astype(np.float32)).reshape(-1,2)
+        # 尝试用 approxPolyDP 逼近为四点
+        peri = cv.arcLength(hull2.astype(np.float32), True)
+        eps = max(1.0, 0.01 * peri)
+        approx = cv.approxPolyDP(hull2.astype(np.float32), eps, True)
+        if approx is not None and len(approx) == 4:
+            return approx.reshape(4,2).astype(np.float32)
+        # 若仍多点，则尽量取最小外接矩形来返回四点（保证四点输出）
+        rect = cv.minAreaRect(best_poly.astype(np.float32))
+        box = cv.boxPoints(rect)
+        return np.array(box, dtype=np.float32)
+    else:
+        # poly 顶点数 <=4，直接返回（保证四点顺序）
+        # 如果是三点，扩展为四点小偏移
+        if best_poly.shape[0] == 3:
+            # 将三角形转换为四点：在最长边中点加一个小偏移点
+            dists = np.linalg.norm(np.diff(np.vstack([best_poly, best_poly[0]]), axis=0), axis=1)
+            i_max = np.argmax(dists)
+            A = best_poly[i_max]
+            B = best_poly[(i_max+1)%3]
+            mid = 0.5*(A+B)
+            # small offset perpendicular
+            v = B - A
+            perp = np.array([-v[1], v[0]])
+            perp = perp / (np.linalg.norm(perp) + 1e-12) * 1e-3
+            new_poly = []
+            for i in range(3):
+                new_poly.append(best_poly[i])
+                if i == i_max:
+                    new_poly.append(mid + perp)
+            return np.array(new_poly, dtype=np.float32)
+        else:
+            return best_poly.astype(np.float32)
+# ----------------------- 新增结束 -----------------------
+
+
+# ----------------------- 新增：把缩放后的四边形绘制为 RGBA overlay（外部填色，内部透明） -----------------------
+def scale_polygon_about_center(pts, center, scalar):
+    """
+    以 center 为中心把 pts 扩缩 scalar 倍（pts: Nx2）
+    """
+    pts = np.array(pts, dtype=np.float32)
+    center = np.array(center, dtype=np.float32)
+    return (pts - center) * float(scalar) + center
+
+
+def make_rgba_overlay_from_quad(image_shape, quad_pts, scalar_quad=1.1, outside_color_hex="#DDCCC1"):
+    """
+    构建 RGBA overlay：
+      - image_shape: img.shape 或 (h,w)
+      - quad_pts: 4x2 array
+      - scalar_quad: 放大因子
+      - outside_color_hex: '#RRGGBB'
+    返回 overlay (H,W,4) uint8，且返回缩放后的 quad 顶点 (int32) 与 center。
+    """
+    if len(image_shape) == 3:
+        h, w = image_shape[0], image_shape[1]
+    else:
+        h, w = image_shape
+
+    hexv = outside_color_hex.lstrip('#')
+    r = int(hexv[0:2], 16); g = int(hexv[2:4], 16); b = int(hexv[4:6], 16)
+
+    overlay = np.zeros((h, w, 4), dtype=np.uint8)
+    overlay[:, :, 0] = b
+    overlay[:, :, 1] = g
+    overlay[:, :, 2] = r
+    overlay[:, :, 3] = 255
+
+    quad_pts = np.array(quad_pts, dtype=np.float32).reshape(-1,2)
+    center = quad_pts.mean(axis=0)
+    quad_scaled = scale_polygon_about_center(quad_pts, center, scalar_quad)
+    quad_scaled_int = np.round(quad_scaled).astype(np.int32)
+
+    # make mask for polygon interior -> set alpha 0 inside
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv.fillPoly(mask, [quad_scaled_int], 255)
+    overlay[mask == 255, 3] = 0  # transparent inside
+    return overlay, quad_scaled_int, center
+# ----------------------- 新增结束 -----------------------
+
+
+# ----------------------- 新增：合成函数 -----------------------
+def composite_overlay_onto_bgr(img_bgr, overlay_rgba):
+    """
+    把 overlay (h,w,4) 覆盖到 img_bgr (h,w,3)。
+    overlay alpha==0 区域显示原图；alpha==255 区域显示 overlay color。
+    """
+    if img_bgr.shape[:2] != overlay_rgba.shape[:2]:
+        raise ValueError("size mismatch")
+    out = img_bgr.copy()
+    alpha = overlay_rgba[:, :, 3]
+    mask_opaque = (alpha == 255)
+    out[mask_opaque] = overlay_rgba[mask_opaque][:, :3]
+    return out
+# ----------------------- 新增结束 -----------------------
+
+
 # ----------------------- 新增：状态栏工具 -----------------------
 def ensure_bgr(img):
     """确保图像是 BGR 3 通道，用于在其上绘制状态栏与文字。"""
@@ -364,7 +664,8 @@ def show_image_with_statusbar(window_name, image, bar_height=24):
 # ----------------------- 新增：状态栏工具 -----------------------
 
 
-def detect_and_filter_corners():
+# =========================== 主检测流程（整合之前逻辑） ===========================
+def detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_deg=3):
     path_image = askopenimagefilename()
     print(f'Opening file {path_image!r} ...')
 
@@ -600,6 +901,48 @@ def detect_and_filter_corners():
     for i, corner in enumerate(corners_merged):
         print(f"角点 {i+1}: x={corner[0]:.2f}, y={corner[1]:.2f}")
 
+    # 现在：无论角点是否虚增/丢失，利用这些角点求最小包含四边形（任意旋转）并放大 composite
+    if corners_merged.size == 0:
+        print("No corners to compute quad from.")
+        show_image_with_statusbar('Refined Corners (Red)', img_original)
+        return
+
+    # --------------- 计算近似最小包含四边形（任意四边形） ---------------
+    print('Computing approximate minimal-area enclosing quadrilateral (this may take some time)...')
+    t0 = time.time()
+    # 角度步长：越小越精确但越慢。默认 3 度。若想更精确可设为 1 或 2。
+    quad = approximate_min_area_enclosing_quadrilateral(corners_merged, angle_step_deg=angle_step_deg)
+    t1 = time.time()
+    print(f'Approx quad computed in {t1-t0:.2f}s, quad points:\n{quad}')
+
+    # 打印四条边的直线方程 ax+by+c=0
+    def line_from_two_points(p1, p2, normalize=True):
+        x1, y1 = float(p1[0]), float(p1[1])
+        x2, y2 = float(p2[0]), float(p2[1])
+        a = y1 - y2
+        b = x2 - x1
+        c = x1 * y2 - x2 * y1
+        if normalize:
+            nrm = math.hypot(a, b)
+            if nrm > 1e-12:
+                a /= nrm; b /= nrm; c /= nrm
+        return (a, b, c)
+
+    for i in range(len(quad)):
+        p1 = quad[i]
+        p2 = quad[(i+1) % len(quad)]
+        a,b,c = line_from_two_points(p1, p2, normalize=True)
+        print(f'edge {i+1}: a={a:.6f}, b={b:.6f}, c={c:.6f}')
+
+    # --------------- 放大四边形并生成 RGBA overlay ---------------
+    overlay_rgba, quad_scaled_int, center = make_rgba_overlay_from_quad(img_original.shape, quad, scalar_quad=scalar_quad, outside_color_hex="#DDCCC1")
+    # 合成
+    composite = composite_overlay_onto_bgr(img_original, overlay_rgba)
+    # 显示结果
+    cv.imshow('Final Composite (outside colored, inner transparent)', composite)
+    print('Overlay center:', center)
+    # --------------- 完成 ---------------
+
     # 5. 在图像上标记精确化后的角点（例如用蓝色圆圈）
     img_with_refined_corners = img_original.copy()
     for corner in corners_merged:
@@ -617,8 +960,8 @@ if __name__ == '__main__':
     print(f'Numpy version: {np.__version__}')
     print(f'Matplotlib version: {matplotlib.__version__}')
 
-    # 检测并过滤角点
-    detect_and_filter_corners()
+    # 运行主流程（可修改 scalar_quad、angle_step_deg）
+    detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_deg=3)
 
     # 主循环：用小延时轮询（而不是 waitKey(0)）以处理鼠标事件并刷新状态栏
     while True:
@@ -627,4 +970,4 @@ if __name__ == '__main__':
             cv.destroyAllWindows()
             exit()
         elif key_event == ord('o'):
-            detect_and_filter_corners()  # 重新选择并处理新图像
+            detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_deg=3)  # 重新选择并处理新图像
