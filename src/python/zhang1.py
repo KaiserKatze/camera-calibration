@@ -10,6 +10,7 @@ import numpy as np
 import scipy.optimize
 import scipy
 import matplotlib.pyplot as plt
+from sklearn.cluster import DBSCAN
 
 
 np.set_printoptions(linewidth=np.inf)
@@ -452,7 +453,7 @@ class ZhangCameraCalibration:
 
     #     return m_full
 
-def plot_relation_between_rotation_skewness_and_homography_relative_error(rotation_skewness_and_homography_relative_error):
+def plot_relation_between_rotation_skewness_and_homography_relative_error_old(rotation_skewness_and_homography_relative_error):
     # 利用 matplotlib 绘制旋转偏斜度与单应性相对误差的散点图
     rotation_skewness, homography_relative_error = zip(*rotation_skewness_and_homography_relative_error)
     plt.figure(figsize=(10, 6))
@@ -462,6 +463,105 @@ def plot_relation_between_rotation_skewness_and_homography_relative_error(rotati
     plt.ylabel('Homography Relative Error')
     plt.grid(True)
     plt.show()
+
+def plot_relation_between_rotation_skewness_and_homography_relative_error(
+    rotation_skewness_and_homography_relative_error,
+    remove_outliers=False,
+    eps=0.3,  # DBSCAN参数：邻域距离
+    min_samples=10,  # DBSCAN参数：最小样本数
+    y_max = None
+):
+    """
+    绘制旋转偏斜度与单应性相对误差的散点图，可选是否去除异常点
+
+    Args:
+        rotation_skewness_and_homography_relative_error: 包含旋转偏斜度和单应性相对误差的二元组列表
+        remove_outliers: 是否移除异常点，默认为False
+        eps: DBSCAN算法的邻域距离参数
+        min_samples: DBSCAN算法的最小样本数参数
+    """
+    # 解压数据
+    rotation_skewness, homography_relative_error = zip(*rotation_skewness_and_homography_relative_error)
+
+    # 转换为numpy数组便于处理
+    rotation_skewness = np.array(rotation_skewness)
+    homography_relative_error = np.array(homography_relative_error)
+
+    # 初始化正常点索引（全部点）
+    normal_point_indices = np.ones_like(homography_relative_error, dtype=bool)
+
+    if y_max is not None:
+        remove_outliers = False
+
+    if remove_outliers:
+        logger.info("开始检测异常点...")
+
+        # 使用DBSCAN进行异常点检测
+        # 重塑数据以适应DBSCAN输入要求
+        X = homography_relative_error.reshape(-1, 1)
+        print(f'{X.shape=}')
+
+        # 使用DBSCAN聚类算法
+        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+        labels = dbscan.fit_predict(X)
+
+        # 标记异常点（DBSCAN将噪声点标记为-1）
+        outlier_mask = (labels == -1)
+        normal_point_indices = ~outlier_mask
+
+        # 计算正常点的y轴最大值
+        if np.any(normal_point_indices):
+            y_max = np.max(homography_relative_error[normal_point_indices])
+            logger.info(f"主要部分单应性相对误差最大值: {y_max:.6f}")
+
+        # 记录异常点信息
+        outlier_count = np.sum(outlier_mask)
+        if outlier_count > 0:
+            logger.warning(f"检测到 {outlier_count} 个异常点:")
+            for i in np.where(outlier_mask)[0]:
+                logger.warning(
+                    f"异常点 {i}: 旋转偏斜度 = {rotation_skewness[i]:.6f}, "
+                    f"单应性相对误差 = {homography_relative_error[i]:.6f}"
+                )
+        else:
+            logger.info("未检测到异常点")
+
+    # 创建图形
+    plt.figure(figsize=(10, 6))
+
+    # 绘制散点图
+    if remove_outliers and np.any(normal_point_indices):
+        # 只绘制正常点
+        plt.scatter(rotation_skewness[normal_point_indices],
+                   homography_relative_error[normal_point_indices],
+                   color='blue', marker='o', label='normal points')
+
+    else:
+        # 绘制所有点
+        plt.scatter(rotation_skewness, homography_relative_error,
+                   color='blue', marker='o')
+
+    # 设置标题和标签
+    plt.title('Rotation Skewness vs Homography Relative Error' +
+              (' (without outliers)' if remove_outliers else ''))
+    plt.xlabel('Rotation Skewness (Frobenius Norm)')
+    plt.ylabel('Homography Relative Error')
+
+    # 设置y轴范围
+    plt.ylim(bottom=0)
+    if y_max is not None:
+        # 为y轴上限添加一些边距
+        y_margin = y_max * 0.1  # 10%的边距
+        plt.ylim(top=y_max + y_margin)
+
+    # 添加网格和图例
+    plt.grid(True, alpha=0.3)
+    if remove_outliers and np.any(~normal_point_indices):
+        plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
 
 
 
@@ -486,8 +586,8 @@ def run():
         _, image_points, rotation, _, homography = projection_model.randomly_project(model_points)
         # logger.debug(f'image_points=\n{image_points[:5]}')
 
-        # m1 = ZhangCameraCalibration.infer_homography_without_radial_distortion(model_points, image_points)
-        m1 = ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(model_points, image_points)
+        m1 = ZhangCameraCalibration.infer_homography_without_radial_distortion(model_points, image_points)
+        # m1 = ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(model_points, image_points)
         logger.debug(f'm1=\n{m1}')
         rotation_skewness_and_homography_relative_error.append((
             np.linalg.norm(rotation - np.eye(rotation.shape[0])),
@@ -495,14 +595,24 @@ def run():
         ))
         list_of_homography.append(m1)
 
-    plot_relation_between_rotation_skewness_and_homography_relative_error(rotation_skewness_and_homography_relative_error)
+    # plot_relation_between_rotation_skewness_and_homography_relative_error_old(
+    #     rotation_skewness_and_homography_relative_error
+    # )
+    # plot_relation_between_rotation_skewness_and_homography_relative_error(
+    #     rotation_skewness_and_homography_relative_error,
+    #     remove_outliers=True,
+    # )
+    # plot_relation_between_rotation_skewness_and_homography_relative_error(
+    #     rotation_skewness_and_homography_relative_error,
+    #     y_max=.004,
+    # )
 
-    # logger.debug('\n' * 5)
-    # K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(list_of_homography)
-    # logger.debug(f'估计的相机内参矩阵 K=\n{K}')
-    # realK = projection_model.K
-    # realKinv = np.linalg.inv(realK)
-    # logger.debug(f'真实的基本矩阵 =\n{realKinv.T @ realKinv}')
+    logger.debug('\n' * 5)
+    K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(list_of_homography)
+    logger.debug(f'估计的相机内参矩阵 K=\n{K}')
+    realK = projection_model.K
+    realKinv = np.linalg.inv(realK)
+    logger.debug(f'真实的基本矩阵 =\n{realKinv.T @ realKinv}')
 
 
 
