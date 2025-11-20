@@ -285,6 +285,26 @@ class ZhangCameraCalibration:
         return normalized_estimated_homography
 
     @classmethod
+    def infer_homography_without_radial_distortion_with_zscore_scaling(cls, model: np.ndarray, pixel: np.ndarray):
+        # 归一化 (Normalization)
+        model_nonhomo = model[:, :2]
+        pixel_nonhomo = pixel[:, :2]
+        mean_model = np.mean(model_nonhomo, axis=0)
+        std_model = np.std(model_nonhomo, axis=0)
+        mean_pixel = np.mean(pixel_nonhomo, axis=0)
+        std_pixel = np.std(pixel_nonhomo, axis=0)
+        model_nonhomo_norm = (model_nonhomo - mean_model) / std_model
+        pixel_nonhomo_norm = (pixel_nonhomo - mean_pixel) / std_pixel
+        # 构建齐次坐标 (Homogeneous Coordinates)
+        model_norm = np.hstack([model_nonhomo_norm, model[:, 2:3]])
+        pixel_norm = np.hstack([pixel_nonhomo_norm, pixel[:, 2:3]])
+        # 利用 svd 估计单应性
+        homography = cls.infer_homography_without_radial_distortion(model_norm, pixel_norm)
+        # 将 homography 的最后一个元素归一化为 1
+        homography = homography / homography[2, 2]
+        return homography
+
+    @classmethod
     def infer_homography_without_radial_distortion_with_isotropic_scaling(cls, model: np.ndarray, pixel: np.ndarray):
         # 数据准备：截取模型点的前两列 (X, Y)
         model_nonhomo = model[:, :2]
@@ -575,7 +595,7 @@ def run():
         v0=240,
     )
     model_points = generate_model_points()
-    n_photos = 100
+    n_photos = 1000
 
     rotation_skewness_and_homography_relative_error = []
     list_of_homography = []
@@ -587,6 +607,7 @@ def run():
         # logger.debug(f'image_points=\n{image_points[:5]}')
 
         m1 = ZhangCameraCalibration.infer_homography_without_radial_distortion(model_points, image_points)
+        # m1 = ZhangCameraCalibration.infer_homography_without_radial_distortion_with_zscore_scaling(model_points, image_points)
         # m1 = ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(model_points, image_points)
         logger.debug(f'm1=\n{m1}')
         rotation_skewness_and_homography_relative_error.append((
@@ -595,26 +616,17 @@ def run():
         ))
         list_of_homography.append(m1)
 
-    # plot_relation_between_rotation_skewness_and_homography_relative_error_old(
-    #     rotation_skewness_and_homography_relative_error
-    # )
-    # plot_relation_between_rotation_skewness_and_homography_relative_error(
-    #     rotation_skewness_and_homography_relative_error,
-    #     remove_outliers=True,
-    # )
-    # plot_relation_between_rotation_skewness_and_homography_relative_error(
-    #     rotation_skewness_and_homography_relative_error,
-    #     y_max=.004,
-    # )
-
-    logger.debug('\n' * 5)
-    K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(list_of_homography)
-    logger.debug(f'估计的相机内参矩阵 K=\n{K}')
-    realK = projection_model.K
-    realKinv = np.linalg.inv(realK)
-    logger.debug(f'真实的基本矩阵 =\n{realKinv.T @ realKinv}')
-
-
+    plot_relation_between_rotation_skewness_and_homography_relative_error_old(
+        rotation_skewness_and_homography_relative_error
+    )
+    plot_relation_between_rotation_skewness_and_homography_relative_error(
+        rotation_skewness_and_homography_relative_error,
+        remove_outliers=True,
+    )
+    plot_relation_between_rotation_skewness_and_homography_relative_error(
+        rotation_skewness_and_homography_relative_error,
+        y_max=.004,
+    )
 
 
 if __name__ == '__main__':
