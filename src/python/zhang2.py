@@ -883,6 +883,40 @@ def compare_with_opencv():
     }
 
 
+def min_max(iterable, dtype=np.float32):
+    min_val = dtype('inf')
+    max_val = dtype('-inf')
+    # 在迭代过程中直接更新
+    for value in iterable:
+        if value < min_val:
+            min_val = value
+        if value > max_val:
+            max_val = value
+    return min_val, max_val
+
+
+def print_homography_condition(list_of_homography: list[np.ndarray]):
+    min_cond_homography, max_cond_homography = min_max(
+        np.linalg.cond(homography)
+        for homography in list_of_homography
+    )
+    logger.debug(f'经过归一化以后的单应性的条件数，最小值 = {min_cond_homography:.6e}，最大值 = {max_cond_homography:.6e}')
+
+
+def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.ndarray):
+    list_of_homography_filtered = []
+    for homography in list_of_homography:
+        h_inv = np.linalg.inv(homography)
+        h_inv_r3 = h_inv[2, :]
+        seq = model_points @ h_inv_r3.T
+        seq = np.sign(seq)
+        rate = abs(seq.sum()) / len(seq)
+        # print(f'单应性的同号率 = {rate}')
+        if rate > .95:
+            list_of_homography_filtered.append(homography)
+    logger.debug(f'拟仿射筛选剩余率 = {len(list_of_homography_filtered) / len(list_of_homography) * 100:.2f}%')
+    return list_of_homography_filtered
+
 
 def run():
     saved_data = load_mat('zhang.mat')
@@ -896,14 +930,10 @@ def run():
                     model_points, image_points
                 )
             )
-        list_of_cond_homography = [
-            np.linalg.cond(homography)
-            for homography in list_of_homography
-        ]
-        min_cond_homography = min(list_of_cond_homography)
-        max_cond_homography = max(list_of_cond_homography)
-
-        print(f'经过归一化以后的单应性的条件数，最小值 = {min_cond_homography:.6e}，最大值 = {max_cond_homography:.6e}')
+        # 打印单应性的条件数
+        print_homography_condition(list_of_homography)
+        # 利用单应性的 quasi-affine 假设，进行筛选
+        list_of_homography = assert_quasi_affine(list_of_homography, model_points)
         K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(
             list_of_homography, model_points, list_of_image_points
         )
