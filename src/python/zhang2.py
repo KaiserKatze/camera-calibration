@@ -190,6 +190,21 @@ def print_all_conditions_of_matrix(matrix: np.ndarray, name: str) -> None:
     最大值    \t= {cond_max:.8f}\t{ill_max}''')
 
 
+def homo2nonhomo(points: np.ndarray):
+    """
+    将齐次坐标 (X,Y,W) 转换为非齐次坐标 (u,v)
+
+    :param points: 点的齐次坐标
+    :type points: np.ndarray
+    :return: 点的非齐次坐标
+    :rtype: NDArray[float64]
+    """
+    denom = points[:, 2:3]  # 齐次分量
+    denom = np.where( np.abs(denom) < 1e-12, 1e-12, denom )  # 避免除零错误
+    points = points[:, :2] / denom
+    return points
+
+
 class Rotation:
     def __init__(self, Rx: float, Ry: float, Rz: float):
         self.R = scipy.spatial.transform.Rotation.from_euler('xyz', [Rx, Ry, Rz], degrees=True).as_matrix()
@@ -478,7 +493,7 @@ class ZhangCameraCalibration:
         def residuals(x) -> np.float64:
             K = x.reshape((3,3))
             Kinv = np.linalg.pinv(K)
-            pixel_2d_homo_diff = []
+            pixel_diff = []
             for homography, pixel_2d_homo in zip(list_of_homography, list_of_pixel_2d_homo):
                 # KinvH1, KinvH2, KinvH3 = (Kinv @ homography).T
                 h1, h2, h3 = homography.T
@@ -504,11 +519,12 @@ class ZhangCameraCalibration:
                 r1, r2, r3 = R.T  # 提取列向量
 
                 pixel_2d_homo_pred = model_2d_homo @ np.column_stack([r1, r2, t]).T @ K.T
-                pixel_2d_homo_diff.append(pixel_2d_homo - pixel_2d_homo_pred)
+                pixel_2d_nonhomo = pixel_2d_homo[:, :2]
+                pixel_2d_nonhomo_pred = homo2nonhomo(pixel_2d_homo_pred)
+                pixel_diff.append(pixel_2d_nonhomo - pixel_2d_nonhomo_pred)
 
-            pixel_2d_homo_diff = np.array(pixel_2d_homo_diff)
-            pixel_nonhomo_diff = pixel_2d_homo_diff[:, :2] / pixel_2d_homo_diff[:, 2:3]
-            return pixel_nonhomo_diff.reshape(-1)
+            pixel_diff = np.array(pixel_diff)
+            return pixel_diff.reshape(-1)
 
         optimize_result = scipy.optimize.least_squares(
             residuals,
