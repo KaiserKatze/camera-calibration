@@ -480,20 +480,21 @@ class ZhangCameraCalibration:
             pixel_2d_homo_diff = []
             for homography, pixel_2d_homo in zip(list_of_homography, list_of_pixel_2d_homo):
                 h1, h2, h3 = homography.T
-                r1 = (KinvH1 := Kinv @ h1) / (KinvH1_norm := np.linalg.norm(KinvH1))
-                r2 = (KinvH2 := Kinv @ h2) / (KinvH2_norm := np.linalg.norm(KinvH2))
-                # 正交化
+                KinvH1 = Kinv @ h1
+                KinvH2 = Kinv @ h2
+                KinvH3 = Kinv @ h3
+                denom = 1.0 / np.linalg.norm(KinvH1)
+                r1 = KinvH1 * denom
+                r2 = KinvH2 * denom
                 r3 = np.cross(r1, r2)
+                t = denom * KinvH3
+
+                # 正交化
                 R = np.column_stack([r1, r2, r3])
                 U, _, Vt = svd(R)
                 R = U @ Vt
-                r1, r2, _ = R.T  # 提取列向量
-                KinvH3 = Kinv @ h3
-                if np.abs(KinvH1_norm - KinvH2_norm) < 1e-8:
-                    KinvH3_norm = KinvH1_norm
-                else:
-                    KinvH3_norm = np.linalg.norm(KinvH3)
-                t = KinvH3 / KinvH3_norm
+                r1, r2, r3 = R.T  # 提取列向量
+
                 pixel_2d_homo_pred = model_2d_homo @ np.column_stack([r1, r2, t]).T
                 pixel_2d_homo_diff.append(pixel_2d_homo - pixel_2d_homo_pred)
 
