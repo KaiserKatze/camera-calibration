@@ -515,7 +515,7 @@ class ZhangCameraCalibration:
             verbose=2,
         )
 
-        print(f'{optimize_result=}')
+        # print(f'{optimize_result=}')
         x_opt = optimize_result.x
         assert x_opt.shape == (9,)
         K = x_opt.reshape((3,3))
