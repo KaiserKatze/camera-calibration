@@ -480,6 +480,7 @@ class ZhangCameraCalibration:
             Kinv = np.linalg.pinv(K)
             pixel_2d_homo_diff = []
             for homography, pixel_2d_homo in zip(list_of_homography, list_of_pixel_2d_homo):
+                # KinvH1, KinvH2, KinvH3 = (Kinv @ homography).T
                 h1, h2, h3 = homography.T
                 KinvH1 = Kinv @ h1
                 KinvH2 = Kinv @ h2
