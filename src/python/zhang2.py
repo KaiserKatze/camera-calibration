@@ -486,6 +486,11 @@ class ZhangCameraCalibration:
                 KinvH2 = Kinv @ h2
                 KinvH3 = Kinv @ h3
                 denom = np.linalg.norm(KinvH1)
+
+                if denom < 1e-12:
+                    # 数值保护：若 denom 太小，跳过该视图（把残差设为高值）
+                    continue
+
                 scalar = 1.0 / denom
                 r1 = KinvH1 * scalar
                 r2 = KinvH2 * scalar
