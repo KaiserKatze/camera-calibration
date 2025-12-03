@@ -493,6 +493,16 @@ class ZhangCameraCalibration:
 
         assert V.shape == (2 * len(list_of_homography), 6), f'矩阵 V 的形状实际上是: {V.shape}'
 
+        # # 视图筛选（剔除病态或重投影误差大的视图）
+        # logger.debug(f'筛选前有 {len(list_of_homography)} 个视图')
+        # list_of_homography_filtered, list_of_pixel_2d_homo_filtered = filter_homographies(
+        #     list_of_homography, list_of_pixel_2d_homo, model_2d_homo,
+        #     rmse_threshold=5.0, cond_threshold=1e6
+        # )
+        # logger.debug(f'筛选前有 {len(list_of_homography_filtered)} 个视图')
+
+        # list_of_homography, list_of_pixel_2d_homo = list_of_homography_filtered, list_of_pixel_2d_homo_filtered
+
         # 计算矩阵 V 的条件数
         # print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
 
