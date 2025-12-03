@@ -484,11 +484,12 @@ class ZhangCameraCalibration:
                 KinvH1 = Kinv @ h1
                 KinvH2 = Kinv @ h2
                 KinvH3 = Kinv @ h3
-                denom = 1.0 / np.linalg.norm(KinvH1)
-                r1 = KinvH1 * denom
-                r2 = KinvH2 * denom
+                denom = np.linalg.norm(KinvH1)
+                scalar = 1.0 / denom
+                r1 = KinvH1 * scalar
+                r2 = KinvH2 * scalar
                 r3 = np.cross(r1, r2)
-                t = denom * KinvH3
+                t = scalar * KinvH3
 
                 # 正交化
                 R = np.column_stack([r1, r2, r3])
