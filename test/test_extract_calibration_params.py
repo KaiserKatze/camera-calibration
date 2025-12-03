@@ -44,7 +44,7 @@ class NotCalibrator:
         a1, a2, a3 = A  # 取出行向量 a1, a2, a3
         # print(f'{P=}')
         # print(f'{V=}')
-        # print(f'{m=}')
+        print(f'{m=}')
         # print(f'{M=}')
         # print(f'{A=}')
         # print(f'{b=}')
@@ -165,4 +165,4 @@ if __name__ == '__main__':
     model = np.array(model, dtype=np.float64)
     pixel = model[:, 0:2]
 
-    RadialCalibrator(model, pixel)
+    NotCalibrator(model, pixel)

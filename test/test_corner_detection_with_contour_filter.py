@@ -11,6 +11,8 @@ from sklearn.cluster import DBSCAN  # 用于聚类分析
 import itertools
 import math
 import time
+import random
+import warnings
 
 
 def askopenimagefilename():
@@ -358,7 +360,7 @@ def simplify_and_reconstruct_mask(contours_filtered, image_shape, area_threshold
 # ----------------------- 新增结束 -----------------------
 
 
-# ----------------------- 新增：最小面积任意四边形（角度枚举 + 半平面交） -----------------------
+# ----------------------- 新增：最小面积任意四边形（加速版本：候选法向量来自凸包边） -----------------------
 
 def _halfplane_intersection_polygon(halfplanes, bbox=None):
     """
@@ -434,15 +436,16 @@ def _halfplane_intersection_polygon(halfplanes, bbox=None):
     return np.array(poly_pts, dtype=np.float32)
 
 
-def approximate_min_area_enclosing_quadrilateral(points, angle_step_deg=3):
+def approximate_min_area_enclosing_quadrilateral(points, angle_step_deg=3, max_normals=40, max_checks=200000):
     """
-    近似寻找任意四边形（四条支持直线对应四个半平面交）最小的包含四边形。
-    方法：
-      - 对角度空间 [0, pi) 以 angle_step_deg 等分，取生成法向量 n(theta)。
-      - 枚举角度序列 a<b<c<d（组合），对每个角度集合构造半平面 n_i·x <= h_i (h_i = max p·n_i)
-      - 求这四个半平面的交多边形（使用半平面交 via 多边形裁剪），计算面积
-      - 记录最小面积的交多边形，返回其顶点（如果没有找到，返回凸包的 minAreaRect 退化结果）
-    复杂度：C(T,4) 个组合，T = 180/angle_step_deg，angle_step_deg 可调（3 或 2 或 1）
+    加速版本的近似最小包含任意四边形：
+    - 候选法向量优先取自凸包的边法线（去重、下采样）
+    - 若候选组合太多，则采用随机组合抽样（上限 max_checks）
+    - 最后做局部精化：在最优解周围对角度做更细搜索
+    参数：
+      - angle_step_deg: 仅作为局部 refine 的角度范围参考（不再全局枚举）
+      - max_normals: 候选法向量最大数量（若凸包边数 > max_normals，则均匀下采样）
+      - max_checks: 若组合数巨大，则随机检查的最多组合数（避免超慢）
     """
     pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
     if pts.shape[0] == 0:
@@ -451,91 +454,196 @@ def approximate_min_area_enclosing_quadrilateral(points, angle_step_deg=3):
         x, y = pts[0]
         return np.array([[x-1,y-1],[x+1,y-1],[x+1,y+1],[x-1,y+1]], dtype=np.float32)
 
-    # 先取凸包（减少点数，提高稳定性）
+    # 先计算凸包（减少点数，提高稳定性）
     hull = cv.convexHull(pts.astype(np.float32)).astype(np.float64).reshape(-1, 2)
     if hull.shape[0] < 1:
         hull = pts
+    H = hull.shape[0]
 
-    # 采样角度
-    angle_list = np.arange(0.0, 180.0, angle_step_deg)  # degrees, [0,180)
-    thetas = np.deg2rad(angle_list)  # radians
-    normals = np.column_stack([np.cos(thetas), np.sin(thetas)])  # shape (T,2)
-
-    # 预计算每个 normal 的 h = max p·n
-    h_vals = np.dot(hull, normals.T).max(axis=0)  # shape (T,)
-
-    best_area = float('inf')
-    best_poly = None
-    best_normals = None
-    best_hs = None
-
-    T = normals.shape[0]
-    # 枚举组合（a<b<c<d）
-    # 为减小组合数，我们先生成索引组合
-    idxs = range(T)
-    combos = itertools.combinations(idxs, 4)
-    # 计时显示
-    start = time.time()
-    checked = 0
-    for (i1, i2, i3, i4) in combos:
-        n1 = normals[i1]
-        n2 = normals[i2]
-        n3 = normals[i3]
-        n4 = normals[i4]
-        h1 = float(h_vals[i1])
-        h2 = float(h_vals[i2])
-        h3 = float(h_vals[i3])
-        h4 = float(h_vals[i4])
-
-        halfplanes = [(n1, h1), (n2, h2), (n3, h3), (n4, h4)]
-        poly = _halfplane_intersection_polygon(halfplanes)
-        checked += 1
-        if poly is None or poly.size == 0:
+    # --- 候选法向量：取自凸包每条边的法线方向 ---
+    normals = []
+    angles = []
+    for i in range(H):
+        p1 = hull[i]
+        p2 = hull[(i+1) % H]
+        edge = p2 - p1
+        if np.linalg.norm(edge) < 1e-12:
             continue
-        # poly 可能有 >4 顶点（如果四个半平面并非角度互补），但它是包含点集的凸多边形
-        # 我们取其面积作为候选
-        area = 0.0
-        if len(poly) >= 3:
-            # polygon area shoelace
-            x = poly[:,0]
-            y = poly[:,1]
-            area = 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
-        if area < best_area and area > 1e-9:
-            best_area = area
-            best_poly = poly.copy()
-            best_normals = (n1, n2, n3, n4)
-            best_hs = (h1, h2, h3, h4)
-    elapsed = time.time() - start
-    # print(f'Checked combinations: {checked}, elapsed {elapsed:.2f}s, best_area={best_area}')
-    if best_poly is None:
-        # 退化：用 minAreaRect 的 box 顶点
+        # 法向量（两个方向等价），取 perpendicular unit vector
+        n = np.array([-edge[1], edge[0]], dtype=np.float64)
+        n = n / (np.linalg.norm(n) + 1e-12)
+        ang = math.degrees(math.atan2(n[1], n[0]))  # [-180,180)
+        # normalize to [0,180)
+        if ang < 0:
+            ang += 180.0
+        normals.append(n)
+        angles.append(ang)
+
+    if len(normals) == 0:
+        # 退化
         rect = cv.minAreaRect(hull.astype(np.float32))
         box = cv.boxPoints(rect)
         return np.array(box, dtype=np.float32)
-    # 为了尽量返回四点表示：如果 best_poly 有多于4个顶点，可以用凸包再用 approxPolyDP
+
+    # 去重法向量（按角度 quantize）
+    quant = 0.5  # degrees for deduplication, 0.5 deg
+    angle_buckets = {}
+    for n, ang in zip(normals, angles):
+        key = round(ang / quant) * quant
+        if key not in angle_buckets:
+            angle_buckets[key] = n
+    unique_angles = sorted(angle_buckets.keys())
+    unique_normals = [angle_buckets[a] for a in unique_angles]
+
+    # 若数量仍然过多，则均匀下采样保持 top max_normals
+    if len(unique_normals) > max_normals:
+        step = int(math.ceil(len(unique_normals) / float(max_normals)))
+        unique_normals = unique_normals[::step]
+        unique_angles = unique_angles[::step]
+
+    normals_arr = np.array(unique_normals, dtype=np.float64)  # shape (C,2)
+    C = normals_arr.shape[0]
+
+    # 预计算每个 normal 的 h = max p·n
+    h_vals = np.dot(hull, normals_arr.T).max(axis=0)  # shape (C,)
+
+    best_area = float('inf')
+    best_poly = None
+    best_idxs = None
+    checked = 0
+
+    # 组合数量
+    total_combos = math.comb(C, 4) if C >= 4 else 0
+
+    # 选择遍历策略：若组合数合理就全部枚举，否则随机抽样有限次数
+    do_random_sampling = (total_combos > max_checks)
+    if not do_random_sampling:
+        combos_iter = itertools.combinations(range(C), 4)
+    else:
+        # 随机抽样：生成随机组合的迭代器（最多 max_checks 次）
+        # 为避免重复组合，使用集合缓存已抽到的组合索引（sorted tuple）
+        seen = set()
+        def random_combos_gen(limit):
+            tries = 0
+            while tries < limit:
+                idxs = sorted(random.sample(range(C), 4))
+                key = tuple(idxs)
+                if key in seen:
+                    tries += 1
+                    continue
+                seen.add(key)
+                yield key
+                tries += 1
+        combos_iter = random_combos_gen(max_checks)
+
+    start = time.time()
+    for idxs in combos_iter:
+        checked += 1
+        i1, i2, i3, i4 = idxs
+        n1 = normals_arr[i1]; n2 = normals_arr[i2]; n3 = normals_arr[i3]; n4 = normals_arr[i4]
+        h1 = float(h_vals[i1]); h2 = float(h_vals[i2]); h3 = float(h_vals[i3]); h4 = float(h_vals[i4])
+        halfplanes = [(n1, h1), (n2, h2), (n3, h3), (n4, h4)]
+        poly = _halfplane_intersection_polygon(halfplanes)
+        if poly is None or poly.size == 0:
+            continue
+        if len(poly) < 3:
+            continue
+        # area via shoelace
+        x = poly[:,0]; y = poly[:,1]
+        area = 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+        if area < best_area and area > 1e-9:
+            best_area = area
+            best_poly = poly.copy()
+            best_idxs = (i1, i2, i3, i4)
+    elapsed = time.time() - start
+
+    # 如果没找到可行解，退回到 minAreaRect
+    if best_poly is None:
+        rect = cv.minAreaRect(hull.astype(np.float32))
+        box = cv.boxPoints(rect)
+        return np.array(box, dtype=np.float32)
+
+    # 局部精化：在 best_idxs 对应角度附近做小步长的细搜索（提高精度）
+    # 先构造角度列表对应 best_idxs
+    best_angles = [unique_angles[i] for i in best_idxs]
+    # 生成小范围局部角度候选（以 angle_step_deg 为半径）
+    fine_angles = []
+    fine_normals = []
+    radius = max(1.0, angle_step_deg)  # deg
+    fine_step = max(0.5, angle_step_deg / 3.0)  # finer step
+    for ang in best_angles:
+        start_ang = ang - radius
+        end_ang = ang + radius
+        a = start_ang
+        while a <= end_ang + 1e-6:
+            aa = a
+            # normalize to [0,180)
+            if aa < 0:
+                aa += 180.0
+            if aa >= 180.0:
+                aa -= 180.0
+            rad = math.radians(aa)
+            n = np.array([math.cos(rad), math.sin(rad)], dtype=np.float64)
+            fine_angles.append(aa)
+            fine_normals.append(n)
+            a += fine_step
+
+    # dedupe fine normals by angle
+    fine_map = {}
+    for ang, n in zip(fine_angles, fine_normals):
+        k = round(ang / 0.1) * 0.1
+        fine_map[k] = n
+    fine_angles_unique = sorted(fine_map.keys())
+    fine_normals_unique = [fine_map[a] for a in fine_angles_unique]
+    F = len(fine_normals_unique)
+    # 组合枚举（如果 F 小）
+    refined_best_area = best_area
+    refined_best_poly = best_poly
+    if F >= 4:
+        max_refine_checks = 50000
+        combos_ref = itertools.combinations(range(F), 4)
+        checked_ref = 0
+        for idxs in combos_ref:
+            checked_ref += 1
+            if checked_ref > max_refine_checks:
+                break
+            n1 = fine_normals_unique[idxs[0]]; n2 = fine_normals_unique[idxs[1]]
+            n3 = fine_normals_unique[idxs[2]]; n4 = fine_normals_unique[idxs[3]]
+            h1 = float(np.dot(hull, n1).max()); h2 = float(np.dot(hull, n2).max())
+            h3 = float(np.dot(hull, n3).max()); h4 = float(np.dot(hull, n4).max())
+            halfplanes = [(n1, h1), (n2, h2), (n3, h3), (n4, h4)]
+            poly = _halfplane_intersection_polygon(halfplanes)
+            if poly is None or poly.size == 0 or len(poly) < 3:
+                continue
+            x = poly[:,0]; y = poly[:,1]
+            area = 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+            if area < refined_best_area and area > 1e-9:
+                refined_best_area = area
+                refined_best_poly = poly.copy()
+        # 若 refined 有改进，则使用
+        if refined_best_area < best_area:
+            best_poly = refined_best_poly
+            best_area = refined_best_area
+
+    # 最终后处理：若多于4顶点，尝试用凸包与 approxPolyDP 逼近成 4 点
     if best_poly.shape[0] > 4:
         hull2 = cv.convexHull(best_poly.astype(np.float32)).reshape(-1,2)
-        # 尝试用 approxPolyDP 逼近为四点
         peri = cv.arcLength(hull2.astype(np.float32), True)
         eps = max(1.0, 0.01 * peri)
         approx = cv.approxPolyDP(hull2.astype(np.float32), eps, True)
         if approx is not None and len(approx) == 4:
             return approx.reshape(4,2).astype(np.float32)
-        # 若仍多点，则尽量取最小外接矩形来返回四点（保证四点输出）
         rect = cv.minAreaRect(best_poly.astype(np.float32))
         box = cv.boxPoints(rect)
         return np.array(box, dtype=np.float32)
     else:
-        # poly 顶点数 <=4，直接返回（保证四点顺序）
-        # 如果是三点，扩展为四点小偏移
         if best_poly.shape[0] == 3:
-            # 将三角形转换为四点：在最长边中点加一个小偏移点
+            # 三点扩展为四点
             dists = np.linalg.norm(np.diff(np.vstack([best_poly, best_poly[0]]), axis=0), axis=1)
             i_max = np.argmax(dists)
             A = best_poly[i_max]
             B = best_poly[(i_max+1)%3]
             mid = 0.5*(A+B)
-            # small offset perpendicular
             v = B - A
             perp = np.array([-v[1], v[0]])
             perp = perp / (np.linalg.norm(perp) + 1e-12) * 1e-3
@@ -694,7 +802,7 @@ def detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_de
         (0, 255, 0),  # 绿色 RGB
         2  # 线宽
     )
-    cv.imshow('All Contours', img_contours_all)
+    # cv.imshow('All Contours', img_contours_all)
 
     # plot_histogram_of_area_of_contours(contours)
 
@@ -775,7 +883,7 @@ def detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_de
     # 通过几何重建（approxPolyDP / minAreaRect / convexHull）把不规则轮廓恢复为四边形，构建更整洁的 mask
     image_shape = img_grayscale.shape[::-1]  # (width, height)
     mask_reconstructed, quad_corners_list = simplify_and_reconstruct_mask(contours_filtered, image_shape)
-    cv.imshow('Reconstructed Mask', mask_reconstructed)
+    # cv.imshow('Reconstructed Mask', mask_reconstructed)
 
     # 如果得到了四边形顶点，就优先用这些顶点作为角点候选
     final_corner_candidates = []
@@ -793,7 +901,7 @@ def detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_de
     cv.drawContours(img_contours_filtered, contours_filtered, -1, (0, 255, 0), 2)  # 绿色，线宽为2
 
     # 显示结果
-    cv.imshow('Filtered Contours (Green)', img_contours_filtered)
+    # cv.imshow('Filtered Contours (Green)', img_contours_filtered)
 
     img_contours_filtered_filled = np.zeros_like(img_grayscale, dtype=np.uint8)
     cv.drawContours(img_contours_filtered_filled, contours_filtered, -1, 255, cv.FILLED)
@@ -804,7 +912,7 @@ def detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_de
     # cv.imshow('Filtered Contours (Thresholded)', img_normalized)
 
     img_float32 = np.float32(img_normalized)
-    cv.imshow('Normalized float', img_float32)
+    # cv.imshow('Normalized float', img_float32)
 
     # 如果我们有 quad 提供的角点候选，优先使用这些候选并做亚像素精化
     corners_refined_from_quads = None
@@ -907,6 +1015,10 @@ def detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_de
         show_image_with_statusbar('Refined Corners (Red)', img_original)
         return
 
+    if len(corners_merged) != 256:
+        warnings.warn('检测到角点虚增/丢失!')
+
+
     # --------------- 计算近似最小包含四边形（任意四边形） ---------------
     print('Computing approximate minimal-area enclosing quadrilateral (this may take some time)...')
     t0 = time.time()
@@ -943,12 +1055,62 @@ def detect_and_filter_corners_and_apply_quad_mask(scalar_quad=1.1, angle_step_de
     print('Overlay center:', center)
     # --------------- 完成 ---------------
 
+
+
+    # # 从 composite 中提取角点并打印这些角点的序号和坐标
+
+    # # 将 composite 转为灰度再二值化（便于角点提取）
+    # composite_gray = cv.cvtColor(composite, cv.COLOR_BGR2GRAY)
+    # _, composite_bin = cv.threshold(composite_gray, 80, 255, cv.THRESH_BINARY_INV)
+    # cv.imshow('Thresholded', composite_bin)
+    # composite_bin = np.float32(composite_bin)
+
+    # dst = cv.cornerHarris(
+    #     composite_bin,
+    #     blockSize=5,  # 处理角点时考虑的邻域大小
+    #     ksize=3,
+    #     k=0.04,
+    # )
+    # dst = cv.dilate(dst, None)
+
+    # # 创建角点二值图像：角点处为255，其他为0
+    # corner_threshold = .01 * dst.max()
+    # # 非极大值抑制（NMS）
+    # nms_size = 3  # NMS 的邻域大小
+    # nms_kernel = cv.getStructuringElement(cv.MORPH_RECT, (nms_size, nms_size))  # 创建一个内核，用来寻找局部最大值
+    # nms_local_max = cv.dilate(dst, nms_kernel)  # 与原始 dst 进行比较，只保留局部最大值对应的点
+    # nms_mask = (dst == nms_local_max) & (dst > corner_threshold)
+
+    # # 提取角点坐标：找到所有大于阈值的像素位置
+    # corner_coordinates = np.column_stack(
+    #     np.where(
+    #         # 这里用 nms_mask.T 是因为 np.where 返回 (y, x)，转置后得到 (x, y) 的格式，便于后续处理
+    #         nms_mask.T
+    #     )
+    # )
+
+    # corners_merged = merge_corners_dbscan(corner_coordinates, eps=4.0, min_samples=1)
+    # # 全局按 y 再按 x 排序，得到行优先顺序
+    # if len(corners_merged) > 0:
+    #     idx = np.lexsort((corners_merged[:,0], corners_merged[:,1]))
+    #     corners_merged = corners_merged[idx]
+
+    # # 4. 打印或保存角点坐标
+    # print(f"在 composite 中检测到 {len(corners_merged)} 个角点")
+    # for i, corner in enumerate(corners_merged):
+    #     print(f"角点 {i+1}: x={corner[0]:.2f}, y={corner[1]:.2f}")
+
+
+
+
+
     # 5. 在图像上标记精确化后的角点（例如用蓝色圆圈）
     img_with_refined_corners = img_original.copy()
     for corner in corners_merged:
         x, y = corner.ravel()
         cv.circle(img_with_refined_corners, (int(round(x)), int(round(y))), 3, (0, 0, 255), -1)  # 红色实心圆
 
+    print(f"最终确定检测到 {len(corners_merged)} 个角点")
     show_image_with_statusbar('Refined Corners (Red)', img_with_refined_corners)
 
 

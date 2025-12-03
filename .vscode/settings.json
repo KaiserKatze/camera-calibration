@@ -1,6 +1,5 @@
 {
     "files.exclude": {
-        "**/*.log": true,
         "**/*.jpg": true,
         "**/*.png": true,
         "**/*.npz": true,

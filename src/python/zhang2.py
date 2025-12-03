@@ -476,7 +476,8 @@ class ZhangCameraCalibration:
 
         # 用牛顿法
         def residuals(x) -> np.float64:
-            Kinv = np.linalg.pinv(x.reshape((3,3)))
+            K = x.reshape((3,3))
+            Kinv = np.linalg.pinv(K)
             pixel_2d_homo_diff = []
             for homography, pixel_2d_homo in zip(list_of_homography, list_of_pixel_2d_homo):
                 h1, h2, h3 = homography.T
@@ -495,12 +496,12 @@ class ZhangCameraCalibration:
                 R = U @ Vt
                 r1, r2, r3 = R.T  # 提取列向量
 
-                pixel_2d_homo_pred = model_2d_homo @ np.column_stack([r1, r2, t]).T
+                pixel_2d_homo_pred = model_2d_homo @ np.column_stack([r1, r2, t]).T @ K.T
                 pixel_2d_homo_diff.append(pixel_2d_homo - pixel_2d_homo_pred)
 
             pixel_2d_homo_diff = np.array(pixel_2d_homo_diff)
-            pixel_2d_homo_diff = np.linalg.norm(pixel_2d_homo_diff, axis=1)
-            return pixel_2d_homo_diff.reshape(-1)
+            pixel_nonhomo_diff = pixel_2d_homo_diff[:, :2] / pixel_2d_homo_diff[:, 2:3]
+            return pixel_nonhomo_diff.reshape(-1)
 
         optimize_result = scipy.optimize.least_squares(
             residuals,
