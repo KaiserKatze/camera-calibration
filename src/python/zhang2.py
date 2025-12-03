@@ -372,7 +372,7 @@ class ZhangCameraCalibration:
         normalized_estimated_homography = estimated_homography / estimated_homography[2,2]
         relative_error = np.linalg.norm(normalized_ground_truth_homography - normalized_estimated_homography)
         relative_error /= np.linalg.norm(normalized_ground_truth_homography)
-        logger.debug(f'单应性相对误差 ={relative_error*100:.6e}%')
+        logger.debug(f'单应性相对误差 ={relative_error*100:.6f}%')
         return relative_error
 
     @classmethod
@@ -867,9 +867,8 @@ def compare_with_opencv():
                 realK = realK.reshape(3,3)
             # logger.info(f'真实的相机内参 K =\n{realK}')
             # logger.info(f'估计 K 与 真实 K 差异 =\n{camera_matrix - realK}')
-            # 相对误差
             rel_err = np.linalg.norm(camera_matrix - realK) / (np.linalg.norm(realK) + 1e-12)
-            logger.info(f'估计 K 相对误差 = {rel_err*100:.6e}%')
+            logger.info(f'估计 K 相对误差 = {rel_err*100:.6f}%')
         except Exception:
             logger.warning('无法解析 real_intrinsic_matrix 的形状以用于比较。')
 
@@ -885,7 +884,7 @@ def compare_with_opencv():
 
 
 
-def run(infer_homography_fn: typing.Callable):
+def run():
     saved_data = load_mat('zhang.mat')
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
@@ -893,7 +892,7 @@ def run(infer_homography_fn: typing.Callable):
         list_of_homography = []
         for image_points in list_of_image_points:
             list_of_homography.append(
-                infer_homography_fn(
+                ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(
                     model_points, image_points
                 )
             )
@@ -911,7 +910,7 @@ def run(infer_homography_fn: typing.Callable):
     logger.debug(f'估计的相机内参矩阵 K=\n{K}')
     realK = saved_data['real_intrinsic_matrix']
     relative_error_of_intrinsic_matrix = np.linalg.norm(K - realK) / np.linalg.norm(realK)
-    logger.debug(f'相机内参矩阵相对误差 =\n{relative_error_of_intrinsic_matrix*100:.6e}%')
+    logger.debug(f'相机内参矩阵相对误差 =\n{relative_error_of_intrinsic_matrix*100:.6f}%')
 
 
 
@@ -926,14 +925,8 @@ if __name__ == '__main__':
     logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
     logger.debug(f'真实的基本矩阵 =\n{realKinv.T @ realKinv}')
 
-    for fn_index, fn in enumerate([
-        # ZhangCameraCalibration.infer_homography_without_radial_distortion,
-        ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling,
-        # ZhangCameraCalibration.infer_homography_without_radial_distortion_with_zscore_scaling,
-    ]):
-        logger.debug('\n' * 10 + '=' * 100)
-        logger.debug(f'尝试第 {fn_index} 种方法，推断单应性 ...')
-        run(fn)
+    logger.debug('\n' * 10 + '=' * 100)
+    run()
 
     # 使用 opencv 现有的算法，求解相机内参矩阵
     # compare_with_opencv()
