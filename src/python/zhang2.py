@@ -64,7 +64,7 @@ class Timer:
     def __exit__(self, exc_type, exc_value, traceback):
         self.end_time = time.time()
         self.elapsed_time = self.end_time - self.start_time
-        logger.debug(f'计算耗时: {self.elapsed_time:.6f} 秒')
+        logger.debug(f'计算耗时: {self.elapsed_time:.6e} 秒')
 
 
 
@@ -183,11 +183,11 @@ def print_all_conditions_of_matrix(matrix: np.ndarray, name: str) -> None:
     cond_max = np.max([ cond_1, cond_2, cond_inf, cond_fro ])
     ill_max = '病态' if cond_max > 1 else ''
     logger.debug(f'''矩阵 {name} 的条件数：
-    列和条件数 \t= {cond_1:.8f}
-    谱条件数   \t= {cond_2:.8f}
-    行和条件数 \t= {cond_inf:.8f}
-    F 条件数   \t= {cond_fro:.8f}
-    最大值    \t= {cond_max:.8f}\t{ill_max}''')
+    列和条件数 \t= {cond_1:.6e}
+    谱条件数   \t= {cond_2:.6e}
+    行和条件数 \t= {cond_inf:.6e}
+    F 条件数   \t= {cond_fro:.6e}
+    最大值    \t= {cond_max:.6e}\t{ill_max}''')
 
 
 def homo2nonhomo(points: np.ndarray):
@@ -203,6 +203,78 @@ def homo2nonhomo(points: np.ndarray):
     denom = np.where( np.abs(denom) < 1e-12, 1e-12, denom )  # 避免除零错误
     points = points[:, :2] / denom
     return points
+
+
+def homography_reprojection_rmse(H: np.ndarray, model_2d_homo: np.ndarray, image_points_homo: np.ndarray) -> float:
+    """
+    计算单个单应性 H 下的重投影 RMSE（像素）。
+    model_2d_homo: shape (M,3)
+    image_points_homo: shape (M,3)
+    返回 RMSE（float）
+    """
+    # 预测像素齐次 coords
+    pred_h = (H @ model_2d_homo.T).T  # shape (M,3)
+    denom_pred = pred_h[:, 2:3]
+    denom_pred = np.where(np.abs(denom_pred) < 1e-12, 1e-12, denom_pred)
+    uv_pred = pred_h[:, :2] / denom_pred
+
+    denom_obs = image_points_homo[:, 2:3]
+    denom_obs = np.where(np.abs(denom_obs) < 1e-12, 1e-12, denom_obs)
+    uv_obs = image_points_homo[:, :2] / denom_obs
+
+    err = uv_obs - uv_pred
+    rmse = np.sqrt(np.mean(np.sum(err**2, axis=1)))
+    return float(rmse)
+
+
+def filter_homographies(list_of_homography, list_of_image_points, model_2d_homo,
+                        rmse_threshold: float = 5.0,
+                        cond_threshold: float = 1e6):
+    """
+    根据单应性重投影 RMSE 和 H 的 condition number 筛选视图。
+    返回筛选后的 (homographies, image_points)
+    参数:
+      rmse_threshold: 若单视图 RMSE > 阈值（像素），则剔除该视图
+      cond_threshold: 若 np.linalg.cond(H) > 阈值，也剔除
+    """
+    keep_h = []
+    keep_img = []
+    for H, img in zip(list_of_homography, list_of_image_points):
+        H = H.astype(np.float64)
+        img = np.asarray(img, dtype=np.float64)
+        # rmse
+        try:
+            rmse = homography_reprojection_rmse(H, model_2d_homo, img)
+        except Exception:
+            # 出错则丢弃
+            continue
+
+        # cond number (对 H 或对 H[:,:2] 的列做条件数检测)
+        try:
+            cond_H = np.linalg.cond(H)
+        except Exception:
+            cond_H = np.inf
+
+        # 也可检查 H 的奇异值差距
+        _, svals, _ = svd(H)
+        s_ratio = float(svals[0] / (svals[-1] + 1e-16))
+
+        # 判定是否保留
+        keep = True
+        if rmse > rmse_threshold:
+            logger.debug(f'单应性的 {rmse=:.6e} > {rmse_threshold=:.6e}，丢弃!')
+            keep = False
+        if cond_H > cond_threshold:
+            logger.debug(f'单应性的 {cond_H=:.6e} > {cond_threshold=:.6e}，丢弃!')
+            keep = False
+        # 若奇异值跨度过大也剔除
+        if s_ratio > 1e8:
+            keep = False
+
+        if keep:
+            keep_h.append(H)
+            keep_img.append(img)
+    return keep_h, keep_img
 
 
 class Rotation:
@@ -300,7 +372,7 @@ class ZhangCameraCalibration:
         normalized_estimated_homography = estimated_homography / estimated_homography[2,2]
         relative_error = np.linalg.norm(normalized_ground_truth_homography - normalized_estimated_homography)
         relative_error /= np.linalg.norm(normalized_ground_truth_homography)
-        logger.debug(f'单应性相对误差 ={relative_error*100:.6f}%')
+        logger.debug(f'单应性相对误差 ={relative_error*100:.6e}%')
         return relative_error
 
     @classmethod
@@ -428,9 +500,9 @@ class ZhangCameraCalibration:
         abs_singular_value = abs(S)
         min_abs_singular_value = abs_singular_value.min()
         max_abs_singular_value = abs_singular_value.max()
-        logger.debug(f'矩阵 V 的奇异值 = \n\t{ ','.join('{:.6f}'.format(x) for x in S.tolist()) }\n'
-                     + f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6f}\n'
-                     + f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6f}\n'
+        logger.debug(f'矩阵 V 的奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
+                     + f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
+                     + f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
                      + f'\t矩阵 V 的谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :2f}')
 
         b = Vh[-1, :]
@@ -443,13 +515,13 @@ class ZhangCameraCalibration:
         ])
         logger.debug(f'估计的基本矩阵 =\n{BB}')
         principal_minors = [np.linalg.det(BB[:i, :i]) for i in range(1,4)]
-        principal_minors_str = ', '.join(['{:.6f}'.format(x) for x in principal_minors])
+        principal_minors_str = ', '.join(['{:.6e}'.format(x) for x in principal_minors])
         logger.debug(f'估计的基本矩阵的顺序主子式 =\n{principal_minors_str}')
         if not all(pm > 0 for pm in principal_minors):
             logger.warning('估计的基本矩阵不是正定矩阵，可能存在数值不稳定问题！')
             BB = cls.project_to_positive_definite_matrix(BB)
             principal_minors = [np.linalg.det(BB[:i, :i]) for i in range(1,4)]
-            principal_minors_str = ', '.join(['{:.6f}'.format(x) for x in principal_minors])
+            principal_minors_str = ', '.join(['{:.6e}'.format(x) for x in principal_minors])
             logger.debug(f'重映射得到的基本矩阵的顺序主子式 =\n{principal_minors_str}')
             B11 = BB[0, 0]
             B12 = BB[0, 1]
@@ -460,28 +532,28 @@ class ZhangCameraCalibration:
 
         mid1 = B12 * B13 - B11 * B23
         mid2 = B11 * B22 - B12 ** 2
-        logger.debug(f'{mid1=:.6f}')
-        logger.debug(f'{mid2=:.6f}')
+        logger.debug(f'{mid1=:.6e}')
+        logger.debug(f'{mid2=:.6e}')
         v0 = mid1 / mid2
-        logger.debug(f'{v0=:.6f}')
+        logger.debug(f'{v0=:.6e}')
         rho = B33 - (B13 ** 2 + v0 * mid1) / B11
         alpha0 = rho / B11
         if alpha0 < 0:
             alpha0 = -alpha0
             rho = -rho
             logger.debug('估计的 alpha0 为负数，已取其绝对值进行计算！')
-        logger.debug(f'{rho=:.6f}')
-        logger.debug(f'{alpha0=:.6f}')
+        logger.debug(f'{rho=:.6e}')
+        logger.debug(f'{alpha0=:.6e}')
         alpha = np.sqrt(alpha0)
-        logger.debug(f'{alpha=:.6f}')
+        logger.debug(f'{alpha=:.6e}')
         beta0 = rho * B11 / mid2
-        logger.debug(f'{beta0=:.6f}')
+        logger.debug(f'{beta0=:.6e}')
         beta = np.sqrt(beta0)
-        logger.debug(f'{beta=:.6f}')
+        logger.debug(f'{beta=:.6e}')
         gamma = - B12 * alpha0 * beta / rho
-        logger.debug(f'{gamma=:.6f}')
+        logger.debug(f'{gamma=:.6e}')
         u0 = gamma * v0 / beta - B13 * alpha0 / rho
-        logger.debug(f'{u0=:.6f}')
+        logger.debug(f'{u0=:.6e}')
         K = np.array([
             [alpha, gamma, u0],
             [.0, beta, v0],
@@ -658,6 +730,18 @@ def init():
     )
 
 
+def show_real_homography(list_of_rotation, list_of_translation, real_K):
+    real_homography = [
+        real_K @ np.column_stack([rotation[:, 0], rotation[:, 1], translation])
+        for rotation, translation in zip(list_of_rotation, list_of_translation)
+    ]
+    for homography in real_homography:
+        h_norm = homography / homography[2, 2]
+        print(f'正在检查单应性 =\n {h_norm}')
+        h_cond = np.linalg.cond(h_norm)
+        print(f'真实单应性条件数 = {h_cond}')
+
+
 def compare_with_opencv():
     logger.debug('\n' * 10 + '=' * 100)
     import cv2
@@ -761,7 +845,7 @@ def compare_with_opencv():
         total_points += objp.shape[0]
 
     rmse = np.sqrt(total_error / total_points)
-    logger.info(f'OpenCV 总重投影 RMSE = {rmse:.6f} 像素')
+    logger.info(f'OpenCV 总重投影 RMSE = {rmse:.6e} 像素')
 
     # 与真实内参比较（如果存在）
     realK = saved_data.get('real_intrinsic_matrix')
@@ -775,7 +859,7 @@ def compare_with_opencv():
             # logger.info(f'估计 K 与 真实 K 差异 =\n{camera_matrix - realK}')
             # 相对误差
             rel_err = np.linalg.norm(camera_matrix - realK) / (np.linalg.norm(realK) + 1e-12)
-            logger.info(f'估计 K 相对误差 = {rel_err*100:.6f}%')
+            logger.info(f'估计 K 相对误差 = {rel_err*100:.6e}%')
         except Exception:
             logger.warning('无法解析 real_intrinsic_matrix 的形状以用于比较。')
 
@@ -803,13 +887,21 @@ def run(infer_homography_fn: typing.Callable):
                     model_points, image_points
                 )
             )
+        list_of_cond_homography = [
+            np.linalg.cond(homography)
+            for homography in list_of_homography
+        ]
+        min_cond_homography = min(list_of_cond_homography)
+        max_cond_homography = max(list_of_cond_homography)
+
+        print(f'经过归一化以后的单应性的条件数，最小值 = {min_cond_homography:.6e}，最大值 = {max_cond_homography:.6e}')
         K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(
             list_of_homography, model_points, list_of_image_points
         )
     logger.debug(f'估计的相机内参矩阵 K=\n{K}')
     realK = saved_data['real_intrinsic_matrix']
     relative_error_of_intrinsic_matrix = np.linalg.norm(K - realK) / np.linalg.norm(realK)
-    logger.debug(f'相机内参矩阵相对误差 =\n{relative_error_of_intrinsic_matrix*100:.6f}%')
+    logger.debug(f'相机内参矩阵相对误差 =\n{relative_error_of_intrinsic_matrix*100:.6e}%')
 
 
 
