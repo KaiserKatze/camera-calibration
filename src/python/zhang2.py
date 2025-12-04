@@ -64,7 +64,82 @@ class Timer:
     def __exit__(self, exc_type, exc_value, traceback):
         self.end_time = time.time()
         self.elapsed_time = self.end_time - self.start_time
-        logger.debug(f'计算耗时: {self.elapsed_time:.6e} 秒')
+        logger.debug(f'计算耗时: {self.elapsed_time:.3f} 秒')
+
+
+
+def skew(v: np.ndarray) -> np.ndarray:
+    """返回向量 v=(x,y,z) 的反对称矩阵 [v]_x"""
+    x, y, z = v.ravel()
+    return np.array([[0.0, -z,  y],
+                     [ z, 0.0, -x],
+                     [-y,  x, 0.0]], dtype=np.float64)
+
+def rodrigues(r: np.ndarray) -> np.ndarray:
+    """
+    Rodrigues: 3-vector -> 3x3 rotation matrix
+    r: shape (3,) or (3,1)
+    """
+    r = np.asarray(r, dtype=np.float64).reshape(-1)
+    if r.size != 3:
+        raise ValueError(f'rodrigues: expected length-3 vector, got length {r.size}')
+    theta = np.linalg.norm(r)
+    if theta < 1e-12:
+        # 小角近似：R ≈ I + [r]_x
+        return np.eye(3, dtype=np.float64) + skew(r)
+    k = r / theta
+    K = skew(k)
+    c = np.cos(theta)
+    s = np.sin(theta)
+    R = c * np.eye(3) + (1 - c) * np.outer(k, k) + s * K
+    return R
+
+def inv_rodrigues(R: np.ndarray) -> np.ndarray:
+    """
+    逆 Rodrigues: 3x3 rotation matrix -> 3-vector
+    返回 r: shape (3,)
+    对 theta≈0 和 theta≈pi 做了数值保护
+    """
+    R = np.asarray(R, dtype=np.float64)
+    assert R.shape == (3,3)
+    # 计算角度
+    trace = np.trace(R)
+    cos_theta = (trace - 1.0) / 2.0
+    # 数值裁剪
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    theta = np.arccos(cos_theta)
+
+    if abs(theta) < 1e-12:
+        # theta ~ 0, r ≈ vee(R - I)/2
+        r = 0.5 * np.array([R[2,1] - R[1,2],
+                             R[0,2] - R[2,0],
+                             R[1,0] - R[0,1]], dtype=np.float64)
+        return r
+
+    # 若 theta ~ pi，需要特殊处理
+    if abs(np.pi - theta) < 1e-6:
+        # 使用对角元来构造旋转轴
+        # 找到最大的对角元
+        R_plus = (R + np.eye(3)) / 2.0
+        # 取对角最大元素对应的轴分量
+        axis = np.array([np.sqrt(max(R_plus[0,0], 0.0)),
+                         np.sqrt(max(R_plus[1,1], 0.0)),
+                         np.sqrt(max(R_plus[2,2], 0.0))], dtype=np.float64)
+        # 正确符号根据非对角元素确定
+        if axis[0] > 1e-8:
+            axis[0] = np.sign(R[2,1] - R[1,2]) * axis[0]
+        if axis[1] > 1e-8:
+            axis[1] = np.sign(R[0,2] - R[2,0]) * axis[1]
+        if axis[2] > 1e-8:
+            axis[2] = np.sign(R[1,0] - R[0,1]) * axis[2]
+        # 返回 r = theta * axis
+        return theta * axis
+
+    # 常规情形
+    r_vec = (theta / (2.0 * np.sin(theta))) * np.array([R[2,1] - R[1,2],
+                                                       R[0,2] - R[2,0],
+                                                       R[1,0] - R[0,1]], dtype=np.float64)
+    return r_vec
 
 
 
@@ -141,11 +216,16 @@ def generate_model_points():
             x_end = x_start + a
             y_end = y_start + a
 
+            x_mid = x_start + a * .3
+            y_mid = y_start + a * .7
+
             points_2d.extend([
                 (x_start, y_start),
                 (x_start, y_end),
                 (x_end, y_start),
                 (x_end, y_end),
+                (x_mid, y_mid),
+                (y_mid, x_mid),
             ])
     points_2d = np.array(points_2d, dtype=np.float64)
 
@@ -164,7 +244,7 @@ def generate_model_points():
     num_points = points_2d.shape[0]
     ones = np.ones((num_points, 1))
     points_2d_homo = np.hstack((points_2d, ones))
-    assert points_2d_homo.shape == (m * n * 4, 3)
+    assert points_2d_homo.shape[1] == 3
     return points_2d_homo
 
 
@@ -473,6 +553,8 @@ class ZhangCameraCalibration:
         把相机内部参数逐个提取出来
         """
 
+        assert len(list_of_homography) == len(list_of_pixel_2d_homo)
+
         def v_constraint(homography: np.ndarray, i: int, j: int):
             def h(x: int, y: int):
                 return homography[x-1, y-1]
@@ -571,46 +653,86 @@ class ZhangCameraCalibration:
         ], dtype=np.float64)
         logger.debug(f'估计的相机内参矩阵 (initial guess) K=\n{K}')
 
-        # 用牛顿法
-        def residuals(x) -> np.float64:
-            K = x.reshape((3,3))
-            Kinv = np.linalg.pinv(K)
-            pixel_diff = []
-            for homography, pixel_2d_homo in zip(list_of_homography, list_of_pixel_2d_homo):
-                # KinvH1, KinvH2, KinvH3 = (Kinv @ homography).T
-                h1, h2, h3 = homography.T
-                KinvH1 = Kinv @ h1
-                KinvH2 = Kinv @ h2
-                KinvH3 = Kinv @ h3
-                denom = np.linalg.norm(KinvH1)
-
-                if denom < 1e-12:
-                    # 数值保护：若 denom 太小，跳过该视图（把残差设为高值）
-                    continue
-
-                scalar = 1.0 / denom
-                r1 = KinvH1 * scalar
-                r2 = KinvH2 * scalar
-                r3 = np.cross(r1, r2)
-                t = scalar * KinvH3
-
-                # 正交化
-                R = np.column_stack([r1, r2, r3])
-                U, _, Vt = svd(R)
+        rvecs_init = []
+        tvecs_init = []
+        for H in list_of_homography:
+            h1, h2, h3 = H.T
+            Kinv = np.linalg.inv(K)
+            lambda_ = 1.0 / np.linalg.norm(Kinv @ h1)
+            r1 = lambda_ * (Kinv @ h1)
+            r2 = lambda_ * (Kinv @ h2)
+            t = lambda_ * (Kinv @ h3)
+            r3 = np.cross(r1, r2)
+            R_approx = np.column_stack([r1, r2, r3])
+            U, _, Vt = svd(R_approx)
+            R = U @ Vt
+            # Ensure det positive
+            if np.linalg.det(R) < 0:
+                U[:, -1] *= -1
                 R = U @ Vt
-                r1, r2, r3 = R.T  # 提取列向量
+            rvec = inv_rodrigues(R)
+            rvecs_init.append(rvec)
+            tvecs_init.append(t)
 
-                pixel_2d_homo_pred = model_2d_homo @ np.column_stack([r1, r2, t]).T @ K.T
-                pixel_2d_nonhomo = pixel_2d_homo[:, :2]
-                pixel_2d_nonhomo_pred = homo2nonhomo(pixel_2d_homo_pred)
-                pixel_diff.append(pixel_2d_nonhomo - pixel_2d_nonhomo_pred)
+        # 用牛顿法
+        def pack_params(K: np.ndarray, rvecs: list[np.ndarray], tvecs: list[np.ndarray]) -> np.ndarray:
+            parts = [K.reshape(-1)]
+            for rv, tv in zip(rvecs, tvecs):
+                parts.append(np.asarray(rv).reshape(-1))
+                parts.append(np.asarray(tv).reshape(-1))
+            return np.concatenate(parts).astype(np.float64)
 
-            pixel_diff = np.array(pixel_diff)
-            return pixel_diff.reshape(-1)
+        def unpack_params(x: np.ndarray, n_views: int):
+            K = x[:9].reshape((3,3))
+            rest = x[9:]
+            rvecs = []
+            tvecs = []
+            for i in range(n_views):
+                r = rest[i*6 : i*6 + 3]
+                t = rest[i*6 + 3 : i*6 + 6]
+                rvecs.append(r)
+                tvecs.append(t)
+            return K, rvecs, tvecs
 
+        def residuals_joint(x: np.ndarray) -> np.ndarray:
+            """
+            x: packed params
+            returns: concatenated residuals (2 * M * V)
+            """
+            n_views = len(list_of_pixel_2d_homo)
+            K, rvecs, tvecs = unpack_params(x, n_views)
+            K = K.astype(np.float64)
+            residuals = []
+
+            for rv, tv, img_h in zip(rvecs, tvecs, list_of_pixel_2d_homo):
+                R = rodrigues(rv)  # rv shape (3,)
+                # model points on plane z=0 in world coords are model_2d_homo (X,Y,1)
+                # camera coords: Xc = R[:, :2] * [X,Y] + t  <-- because model z=1 entry corresponds to affine
+                # but safer: treat model as (X,Y,0) in 3D and do full R @ [X,Y,0] + t
+                M = model_2d_homo[:, :2]  # (M,2)
+                # Compose 3D points with z=0
+                X3 = np.hstack([M, np.zeros((M.shape[0], 1), dtype=np.float64)])  # (M,3)
+                Xc = (R @ X3.T).T + np.asarray(tv).reshape(1,3)  # (M,3)
+
+                # project
+                p_h = (K @ Xc.T).T  # (M,3)
+                denom = p_h[:, 2:3]
+                denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+                uv_pred = p_h[:, :2] / denom
+
+                denom_obs = img_h[:, 2:3]
+                denom_obs = np.where(np.abs(denom_obs) < 1e-12, 1e-12, denom_obs)
+                uv_obs = img_h[:, :2] / denom_obs
+
+                diff = (uv_obs - uv_pred).reshape(-1)
+                residuals.append(diff)
+
+            return np.concatenate(residuals).astype(np.float64)
+
+        x0 = pack_params(K, rvecs_init, tvecs_init)
         optimize_result = scipy.optimize.least_squares(
-            residuals,
-            x0=K.reshape(-1),
+            residuals_joint,
+            x0=x0,
             method='lm',  # Levenberg-Marquardt algorithm
             xtol=1e-8,
             ftol=1e-8,
@@ -621,10 +743,9 @@ class ZhangCameraCalibration:
 
         # print(f'{optimize_result=}')
         x_opt = optimize_result.x
-        assert x_opt.shape == (9,)
-        K = x_opt.reshape((3,3))
+        K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, len(list_of_pixel_2d_homo))
 
-        return K
+        return K_opt
 
 
 
@@ -715,7 +836,7 @@ def init():
         v0=240,
     )
     model_points = generate_model_points()
-    n_photos = 100
+    n_photos = 20
 
     list_of_image_points = []
     list_of_rotation = []
@@ -904,38 +1025,57 @@ def print_homography_condition(list_of_homography: list[np.ndarray]):
 
 
 def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.ndarray):
-    list_of_homography_filtered = []
-    for homography in list_of_homography:
-        h_inv = np.linalg.inv(homography)
+    """
+    返回被判定为 quasi-affine 的视图索引列表（indices），以及按这些索引筛选后的 homographies。
+    这样可以确保后续用到的图像点集合与单应性列表一一对应。
+    """
+    kept_idx = []
+    for idx, homography in enumerate(list_of_homography):
+        try:
+            h_inv = np.linalg.inv(homography)
+        except np.linalg.LinAlgError:
+            continue
         h_inv_r3 = h_inv[2, :]
         seq = model_points @ h_inv_r3.T
         seq = np.sign(seq)
         rate = abs(seq.sum()) / len(seq)
-        # print(f'单应性的同号率 = {rate}')
         if rate > .95:
-            list_of_homography_filtered.append(homography)
-    logger.debug(f'拟仿射筛选剩余率 = {len(list_of_homography_filtered) / len(list_of_homography) * 100:.2f}%')
-    return list_of_homography_filtered
+            kept_idx.append(idx)
+    remain_ratio = len(kept_idx) / max(1, len(list_of_homography))
+    logger.debug(f'拟仿射筛选剩余率 = {remain_ratio * 100:.2f}%')
+    return kept_idx
 
 
 def run():
     saved_data = load_mat('zhang.mat')
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
+    logger.debug(f'可用校正图像数量: {len(list_of_image_points)}')
     with Timer():
         list_of_homography = []
+        # 为各个不同视图分别计算单应性
         for image_points in list_of_image_points:
             list_of_homography.append(
                 ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(
                     model_points, image_points
                 )
             )
-        # 打印单应性的条件数
-        print_homography_condition(list_of_homography)
         # 利用单应性的 quasi-affine 假设，进行筛选
-        list_of_homography = assert_quasi_affine(list_of_homography, model_points)
+        kept_idx = assert_quasi_affine(list_of_homography, model_points)
+        # kept_idx = kept_idx[:10]
+        list_of_homography_filtered = [
+            list_of_homography[i]
+            for i in kept_idx
+        ]
+        list_of_image_points_filtered = [
+            list_of_image_points[i]
+            for i in kept_idx
+        ]
+        # 打印单应性的条件数
+        print_homography_condition(list_of_homography_filtered)
+        # 估计相机内参
         K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(
-            list_of_homography, model_points, list_of_image_points
+            list_of_homography_filtered, model_points, list_of_image_points_filtered
         )
     logger.debug(f'估计的相机内参矩阵 K=\n{K}')
     realK = saved_data['real_intrinsic_matrix']
@@ -959,4 +1099,4 @@ if __name__ == '__main__':
     run()
 
     # 使用 opencv 现有的算法，求解相机内参矩阵
-    # compare_with_opencv()
+    compare_with_opencv()
