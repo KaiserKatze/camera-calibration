@@ -989,7 +989,7 @@ def compare_with_opencv():
             # logger.info(f'真实的相机内参 K =\n{realK}')
             # logger.info(f'估计 K 与 真实 K 差异 =\n{camera_matrix - realK}')
             rel_err = np.linalg.norm(camera_matrix - realK) / (np.linalg.norm(realK) + 1e-12)
-            logger.info(f'估计 K 相对误差 = {rel_err*100:.6f}%')
+            logger.info(f'相机内参矩阵相对误差(L2范数) = {rel_err*100:.2f}%')
         except Exception:
             logger.warning('无法解析 real_intrinsic_matrix 的形状以用于比较。')
 
@@ -1080,9 +1080,11 @@ def run():
     logger.debug(f'估计的相机内参矩阵 K=\n{K}')
     realK = saved_data['real_intrinsic_matrix']
     relative_error_of_intrinsic_matrix = np.linalg.norm(K - realK) / np.linalg.norm(realK)
-    logger.debug(f'相机内参矩阵相对误差 =\n{relative_error_of_intrinsic_matrix*100:.6f}%')
-
-
+    logger.debug(f'相机内参矩阵相对误差(L2范数) =\n{relative_error_of_intrinsic_matrix*100:.2f}%')
+    relative_error_elementwise = (K - realK) / (realK + np.finfo(realK.dtype).tiny)
+    relative_error_elementwise[relative_error_elementwise > 1e10] = np.inf
+    relative_error_elementwise[relative_error_elementwise < -1e10] = -np.inf
+    logger.debug(f'相机内参矩阵相对误差(逐个元素 =\n{str(np.vectorize(lambda x: f'{x*100:.2f}%')(relative_error_elementwise))}')
 
 
 if __name__ == '__main__':
