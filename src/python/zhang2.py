@@ -6,6 +6,7 @@ import itertools
 import functools
 import typing
 import time
+import os
 
 import numpy as np
 import scipy.optimize
@@ -13,6 +14,10 @@ import scipy
 import scipy.io
 import matplotlib.pyplot as plt
 from sklearn.cluster import DBSCAN
+
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+
 
 
 np.set_printoptions(linewidth=np.inf)
@@ -444,6 +449,32 @@ class CameraModel:
         translation = Translation.randomize().T
         return self._arbitrary_project(model_2d_homo, rotation, translation)
 
+    def identity_project(self, model_2d_homo: np.ndarray):
+        rotation = np.identity(3)
+        translation = np.zeros((3, 1))
+        return self._arbitrary_project(model_2d_homo, rotation, translation)
+
+    @staticmethod
+    def visualize_projection(objpoints: np.ndarray, imgpoints: list[np.ndarray], view_index: int = 0):
+        """
+        可视化第 view_index 个视图的模型点与投影点
+        """
+        import matplotlib.pyplot as plt
+        obj_obs = objpoints.reshape(-1, 2)
+        img_obs = imgpoints[view_index].reshape(-1, 2)
+
+        plt.figure(figsize=(6, 6))
+        plt.scatter(img_obs[:, 0], img_obs[:, 1], c='r', marker='o', label='像素点')
+        plt.scatter(obj_obs[:, 0], obj_obs[:, 1], c='b', marker='x', label='模型点')
+        for i in range(img_obs.shape[0]):
+            plt.plot([img_obs[i, 0], obj_obs[i, 0]], [img_obs[i, 1], obj_obs[i, 1]], 'g-', linewidth=0.5)
+        plt.gca().invert_yaxis()  # 图像坐标通常原点在左上
+        plt.legend()
+        plt.title(f"第 {view_index} 个机位下 模型点-像素点 映射关系")
+        path_fig = f'fig-{view_index}-projection.png'
+        print('saving figure to:', os.path.abspath(path_fig))
+        plt.savefig(path_fig, dpi=150, bbox_inches='tight')
+
 
 class ZhangCameraCalibration:
     @classmethod
@@ -548,7 +579,8 @@ class ZhangCameraCalibration:
     @classmethod
     def extract_intrinsic_parameters_from_homography(cls, list_of_homography: typing.List[np.ndarray],
                                                      model_2d_homo: np.ndarray,
-                                                     list_of_pixel_2d_homo: typing.List[np.ndarray]):
+                                                     list_of_pixel_2d_homo: typing.List[np.ndarray],
+                                                     realK: np.ndarray = None):
         """
         把相机内部参数逐个提取出来
         """
@@ -652,6 +684,8 @@ class ZhangCameraCalibration:
             [.0, .0, 1.],
         ], dtype=np.float64)
         logger.debug(f'估计的相机内参矩阵 (initial guess) K=\n{K}')
+        if realK is not None:
+            evaluate_relative_error(K, realK)
 
         rvecs_init = []
         tvecs_init = []
@@ -873,6 +907,16 @@ def show_real_homography(list_of_rotation, list_of_translation, real_K):
         print(f'真实单应性条件数 = {h_cond}')
 
 
+def evaluate_relative_error(estimated_intrinsic_matrix, real_intrinsic_matrix):
+    tiny = np.finfo(real_intrinsic_matrix.dtype).tiny
+    relative_error_norm = np.linalg.norm(estimated_intrinsic_matrix - real_intrinsic_matrix) / (np.linalg.norm(real_intrinsic_matrix) + tiny)
+    logger.info(f'相机内参矩阵相对误差(L2范数) = {relative_error_norm*100:.2f}%')
+    relative_error_elementwise = (estimated_intrinsic_matrix - real_intrinsic_matrix) / (real_intrinsic_matrix + tiny)
+    relative_error_elementwise[relative_error_elementwise > 1e10] = np.inf
+    relative_error_elementwise[relative_error_elementwise < -1e10] = -np.inf
+    logger.debug(f'相机内参矩阵相对误差(逐个元素) =\n{str(np.vectorize(lambda x: f'{x*100:.2f}%')(relative_error_elementwise))}')
+
+
 def compare_with_opencv():
     logger.debug('\n' * 10 + '=' * 100)
     import cv2
@@ -986,10 +1030,7 @@ def compare_with_opencv():
             # 如果 loadmat 导致维度多一级，扁平化
             if realK.shape != (3,3):
                 realK = realK.reshape(3,3)
-            # logger.info(f'真实的相机内参 K =\n{realK}')
-            # logger.info(f'估计 K 与 真实 K 差异 =\n{camera_matrix - realK}')
-            rel_err = np.linalg.norm(camera_matrix - realK) / (np.linalg.norm(realK) + 1e-12)
-            logger.info(f'相机内参矩阵相对误差(L2范数) = {rel_err*100:.2f}%')
+            evaluate_relative_error(camera_matrix, realK)
         except Exception:
             logger.warning('无法解析 real_intrinsic_matrix 的形状以用于比较。')
 
@@ -1050,6 +1091,11 @@ def run():
     saved_data = load_mat('zhang.mat')
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
+
+    for index_image_points in range(len(list_of_image_points)):
+        CameraModel.visualize_projection(model_points, list_of_image_points, index_image_points)
+
+    realK = saved_data['real_intrinsic_matrix']
     logger.debug(f'可用校正图像数量: {len(list_of_image_points)}')
     with Timer():
         list_of_homography = []
@@ -1075,16 +1121,11 @@ def run():
         print_homography_condition(list_of_homography_filtered)
         # 估计相机内参
         K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(
-            list_of_homography_filtered, model_points, list_of_image_points_filtered
+            list_of_homography_filtered, model_points, list_of_image_points_filtered,
+            realK=realK,
         )
     logger.debug(f'估计的相机内参矩阵 K=\n{K}')
-    realK = saved_data['real_intrinsic_matrix']
-    relative_error_of_intrinsic_matrix = np.linalg.norm(K - realK) / np.linalg.norm(realK)
-    logger.debug(f'相机内参矩阵相对误差(L2范数) =\n{relative_error_of_intrinsic_matrix*100:.2f}%')
-    relative_error_elementwise = (K - realK) / (realK + np.finfo(realK.dtype).tiny)
-    relative_error_elementwise[relative_error_elementwise > 1e10] = np.inf
-    relative_error_elementwise[relative_error_elementwise < -1e10] = -np.inf
-    logger.debug(f'相机内参矩阵相对误差(逐个元素 =\n{str(np.vectorize(lambda x: f'{x*100:.2f}%')(relative_error_elementwise))}')
+    evaluate_relative_error(K, realK)
 
 
 if __name__ == '__main__':
