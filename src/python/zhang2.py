@@ -159,7 +159,7 @@ def normalize_points(points):
         new_points: 归一化后的点坐标，形状为 (N, 2)。
         T: 3x3 的变换矩阵，满足 new_points_homogeneous = T * old_points_homogeneous。
     """
-    # 1. 计算重心 (Centroid) [cite: 166]
+    # 1. 计算重心 (Centroid)
     centroid = np.mean(points, axis=0)
     cx, cy = centroid[0], centroid[1]
 
@@ -167,12 +167,15 @@ def normalize_points(points):
     shifted_points = points - centroid
 
     # 2. 计算平均距离
-    # 计算每个点到原点的欧几里得距离 [cite: 34]
+    # 计算每个点到原点的欧几里得距离
     distances = np.sqrt(np.sum(shifted_points**2, axis=1))
     mean_dist = np.mean(distances)
 
-    # 3. 计算缩放因子，使得平均距离等于 sqrt(2) [cite: 167]
-    scale = np.sqrt(2) / mean_dist
+    # 3. 计算缩放因子，使得平均距离等于 sqrt(2)
+    if mean_dist < 1e-8:
+        scale = 1.0  # 防止除以接近0的值
+    else:
+        scale = np.sqrt(2) / mean_dist
 
     # 4. 构建变换矩阵 T
     # T = [scale,   0,   -scale * cx]
@@ -204,34 +207,17 @@ def generate_model_points():
         points_2d_homo: 模型点齐次坐标，形状为 (N, 3)。
     """
 
-    m = 8  # 网格行数
-    n = 8  # 网格列数
+    n = 3  # 网格列数
     a = 25  # 每个黑色正方形的边长（像素）
-    b = 30  # 相邻正方形之间的间距（像素）
-    c = 50  # 正方形与图片边缘的最小距离（像素）
 
     points_2d = []
-    for i in range(m):
+    for i in range(n):
         for j in range(n):
             # 计算当前正方形的左上角坐标
-            x_start = c + j * (a + b)
-            y_start = c + i * (a + b)
-
-            # 计算当前正方形的右下角坐标
-            x_end = x_start + a
-            y_end = y_start + a
-
-            x_mid = x_start + a * .3
-            y_mid = y_start + a * .7
-
-            points_2d.extend([
-                (x_start, y_start),
-                (x_start, y_end),
-                (x_end, y_start),
-                (x_end, y_end),
-                (x_mid, y_mid),
-                (y_mid, x_mid),
-            ])
+            points_2d.append(
+                (i * a, j * a)
+            )
+    assert len(points_2d) == n * n
     points_2d = np.array(points_2d, dtype=np.float64)
 
     # 居中
@@ -285,7 +271,8 @@ def homo2nonhomo(points: np.ndarray):
     :rtype: NDArray[float64]
     """
     denom = points[:, 2:3]  # 齐次分量
-    denom = np.where( np.abs(denom) < 1e-12, 1e-12, denom )  # 避免除零错误
+    # 防止除以接近0的值，使用一个极小值
+    denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)  # 避免除零错误
     points = points[:, :2] / denom
     return points
 
@@ -300,11 +287,13 @@ def homography_reprojection_rmse(H: np.ndarray, model_2d_homo: np.ndarray, image
     # 预测像素齐次 coords
     pred_h = (H @ model_2d_homo.T).T  # shape (M,3)
     denom_pred = pred_h[:, 2:3]
-    denom_pred = np.where(np.abs(denom_pred) < 1e-12, 1e-12, denom_pred)
+    # 防止除以接近0的值
+    denom_pred = np.where(np.abs(denom_pred) < 1e-12, np.sign(denom_pred) * 1e-12, denom_pred)
     uv_pred = pred_h[:, :2] / denom_pred
 
     denom_obs = image_points_homo[:, 2:3]
-    denom_obs = np.where(np.abs(denom_obs) < 1e-12, 1e-12, denom_obs)
+    # 防止除以接近0的值
+    denom_obs = np.where(np.abs(denom_obs) < 1e-12, np.sign(denom_obs) * 1e-12, denom_obs)
     uv_obs = image_points_homo[:, :2] / denom_obs
 
     err = uv_obs - uv_pred
@@ -407,8 +396,14 @@ class CameraModel:
             [0, beta / np.sin(theta), v0],
             [0, 0, 1],
         ])
+        print('内参矩阵 K=\n', self.K)
+        Kinv = np.linalg.inv(self.K)
+        print('基本矩阵 B=\n', Kinv.T @ Kinv)
 
-    def _arbitrary_project(self, model_2d_homo: np.ndarray, rotation: np.ndarray, translation: np.ndarray):
+    def _arbitrary_project(self, model_2d_homo: np.ndarray,
+                           rotation: np.ndarray,
+                           translation: np.ndarray,
+                           noise: float | None = 0.5):
         """
         将世界坐标系中的模型点投影到像素坐标系，输入模型点的齐次坐标，返回像素点的齐次坐标
 
@@ -426,16 +421,34 @@ class CameraModel:
         # 计算单应性 H
         H = self.K @ np.hstack((rotation[:, :2], translation))
         assert H.shape == (3, 3)
+        print('单应性 H=\n', H)
+
+        # 检查H矩阵是否接近奇异（条件数过大）
+        cond_H = np.linalg.cond(H)
+        if cond_H > 1e12:
+            logger.warning(f'单应性矩阵条件数过大: {cond_H:.6e}, 可能导致数值不稳定')
+
         # logger.debug(f'真实的旋转矩阵 R=\n{rotation}')
         # logger.debug(f'真实的平移向量 T=\n{translation}')
         # logger.debug(f'真实的单应性 H=\n{H}')
         # 计算像素点的齐次坐标
         pixel_2d_homo = model_2d_homo @ H.T
+
+        # 检查是否有无穷大或NaN值
+        if np.any(np.isinf(pixel_2d_homo)) or np.any(np.isnan(pixel_2d_homo)):
+            raise ValueError('投影结果包含无穷大或NaN值')
+
         # 计算像素点的非齐次坐标
         pixel_2d = pixel_2d_homo[:, :2] / pixel_2d_homo[:, 2:3]
-        # 给像素点的非齐次坐标添加高斯噪声（均值=0，标准差=0.5 像素）
-        noise = np.random.normal(0, 0.5, pixel_2d.shape)
-        pixel_2d += noise
+
+        # print('模型点的齐次坐标 model_2d_homo=\n', model_2d_homo)
+        # print('像素点的齐次坐标 pixel_2d_homo=\n', pixel_2d_homo)
+        # print('像素的非齐次坐标 pixel_2d=\n', pixel_2d)
+
+        if noise is not None:
+            # 给像素点的非齐次坐标添加高斯噪声（均值=0，标准差=0.5 像素）
+            noise = np.random.normal(0, 0.5, pixel_2d.shape)
+            pixel_2d += noise
         # 返回像素点的齐次坐标
         num_points = pixel_2d.shape[0]
         ones = np.ones((num_points, 1))
@@ -450,29 +463,38 @@ class CameraModel:
         return self._arbitrary_project(model_2d_homo, rotation, translation)
 
     def identity_project(self, model_2d_homo: np.ndarray):
-        rotation = np.identity(3)
-        translation = np.zeros((3, 1))
-        return self._arbitrary_project(model_2d_homo, rotation, translation)
+        rotation = np.identity(3, dtype=np.float64)
+        translation = np.array([[0.0], [0.0], [1.0]], dtype=np.float64)
+        return self._arbitrary_project(model_2d_homo, rotation, translation, noise=None)
 
     @staticmethod
     def visualize_projection(objpoints: np.ndarray, imgpoints: list[np.ndarray], view_index: int = 0):
         """
         可视化第 view_index 个视图的模型点与投影点
         """
-        import matplotlib.pyplot as plt
+        objpoints = objpoints[:, 0:2]
+        imgpoints = imgpoints[view_index, :, 0:2]
+        print('objpoints=\n', objpoints)
+        print('imgpoints=\n', imgpoints)
         obj_obs = objpoints.reshape(-1, 2)
-        img_obs = imgpoints[view_index].reshape(-1, 2)
+        img_obs = imgpoints.reshape(-1, 2)
+        assert img_obs.shape[0] == obj_obs.shape[0]
 
-        plt.figure(figsize=(6, 6))
+        plt.figure()
         plt.scatter(img_obs[:, 0], img_obs[:, 1], c='r', marker='o', label='像素点')
         plt.scatter(obj_obs[:, 0], obj_obs[:, 1], c='b', marker='x', label='模型点')
         for i in range(img_obs.shape[0]):
-            plt.plot([img_obs[i, 0], obj_obs[i, 0]], [img_obs[i, 1], obj_obs[i, 1]], 'g-', linewidth=0.5)
+            plt.plot(
+                [img_obs[i, 0], obj_obs[i, 0]],
+                [img_obs[i, 1], obj_obs[i, 1]],
+                'g-', linewidth=0.5,
+            )
         plt.gca().invert_yaxis()  # 图像坐标通常原点在左上
         plt.legend()
         plt.title(f"第 {view_index} 个机位下 模型点-像素点 映射关系")
         path_fig = f'fig-{view_index}-projection.png'
         print('saving figure to:', os.path.abspath(path_fig))
+        # plt.show()
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
 
 
@@ -499,6 +521,10 @@ class ZhangCameraCalibration:
         assert model.shape[1] == pixel.shape[1] == 3, '必须输入模型点、像素点的二维齐次坐标!'
         assert model.shape[0] == pixel.shape[0] > 6, '样本数量太少!'
         model_h = model.shape[0]
+        # 检查输入是否包含无穷大或NaN值
+        if np.any(np.isinf(model)) or np.any(np.isnan(model)) or np.any(np.isinf(pixel)) or np.any(np.isnan(pixel)):
+            logger.warning('输入数据包含无穷大或NaN值，跳过当前计算')
+
         # 矢量化构造 L （每个对应产生两行）
         zeros = np.zeros_like(model)
         u = pixel[:, 0:1]
@@ -516,10 +542,21 @@ class ZhangCameraCalibration:
         # logger.debug(f'用来求解单应性的系数矩阵 L=\n{L}')
         assert L.shape == (2 * model_h, 9)
 
+        # 检查L矩阵是否包含无穷大或NaN值
+        if np.any(np.isinf(L)) or np.any(np.isnan(L)):
+            logger.warning('系数矩阵L包含无穷大或NaN值，返回单位矩阵')
+
         _, _, Vh = svd(L)
         m = Vh[-1, :]
         assert len(m) == 9  # 可以估计单应性的全部三个行向量
         estimated_homography = m.reshape((3,3))
+
+        print('估计的单应性 H=\n', estimated_homography)
+
+        # 检查估计的单应性是否包含无穷大或NaN值
+        if np.any(np.isinf(estimated_homography)) or np.any(np.isnan(estimated_homography)):
+            logger.warning('估计的单应性包含无穷大或NaN值，返回单位矩阵')
+
         normalized_estimated_homography = estimated_homography / estimated_homography[2,2]
         return normalized_estimated_homography
 
@@ -532,6 +569,11 @@ class ZhangCameraCalibration:
         std_model = np.std(model_nonhomo, axis=0)
         mean_pixel = np.mean(pixel_nonhomo, axis=0)
         std_pixel = np.std(pixel_nonhomo, axis=0)
+
+        # 防止标准差为0的情况
+        std_model = np.where(std_model < 1e-8, 1.0, std_model)
+        std_pixel = np.where(std_pixel < 1e-8, 1.0, std_pixel)
+
         model_nonhomo_norm = (model_nonhomo - mean_model) / std_model
         pixel_nonhomo_norm = (pixel_nonhomo - mean_pixel) / std_pixel
         # 构建齐次坐标 (Homogeneous Coordinates)
@@ -617,6 +659,10 @@ class ZhangCameraCalibration:
 
         # list_of_homography, list_of_pixel_2d_homo = list_of_homography_filtered, list_of_pixel_2d_homo_filtered
 
+        # 检查V矩阵是否包含无穷大或NaN值
+        if np.any(np.isinf(V)) or np.any(np.isnan(V)):
+            logger.warning('矩阵V包含无穷大或NaN值，使用默认内参矩阵')
+
         # 计算矩阵 V 的条件数
         # print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
 
@@ -624,20 +670,40 @@ class ZhangCameraCalibration:
         abs_singular_value = abs(S)
         min_abs_singular_value = abs_singular_value.min()
         max_abs_singular_value = abs_singular_value.max()
-        logger.debug(f'矩阵 V 的奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
-                     + f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
-                     + f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
-                     + f'\t矩阵 V 的谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :2f}')
 
-        b = Vh[-1, :]
+        if min_abs_singular_value < 1e-12:
+            logger.warning('矩阵V的最小奇异值接近0，可能导致数值不稳定')
+            # 使用正则化方法求解
+            b = Vh[-1, :]
+        else:
+            logger.debug(f'矩阵 V 的奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
+                         + f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
+                         + f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
+                         + f'\t矩阵 V 的谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :2f}')
+
+            b = Vh[-1, :]
+
         assert b.shape == (6,), f'向量 b 的形状实际上是: {b.shape}'
+        B11, B12, B22, B13, B23, B33 = b
+        BB = np.array([
+            [B11, B12, B13],
+            [B12, B22, B23],
+            [B13, B23, B33],
+        ], dtype=np.float64)
+        print('估计的基本矩阵(未修改符号) B=\n', BB)
+
+        # 检查B矩阵元素是否有效
+        if np.any(np.isinf(BB)) or np.any(np.isnan(BB)):
+            raise ValueError('B矩阵包含无效值，使用默认内参矩阵')
+
         B11, B12, B22, B13, B23, B33 = b / np.sign(b[0])
+
         BB = np.array([
             [B11, B12, B13],
             [B12, B22, B23],
             [B13, B23, B33],
         ])
-        logger.debug(f'估计的基本矩阵 =\n{BB}')
+        logger.debug(f'估计的基本矩阵(已修改符号) B=\n{BB}')
         principal_minors = [np.linalg.det(BB[:i, :i]) for i in range(1,4)]
         principal_minors_str = ', '.join(['{:.6e}'.format(x) for x in principal_minors])
         logger.debug(f'估计的基本矩阵的顺序主子式 =\n{principal_minors_str}')
@@ -658,6 +724,14 @@ class ZhangCameraCalibration:
         mid2 = B11 * B22 - B12 ** 2
         logger.debug(f'{mid1=:.6e}')
         logger.debug(f'{mid2=:.6e}')
+
+        # 检查中间计算值是否有效
+        if np.isinf(mid1) or np.isinf(mid2) or np.isnan(mid1) or np.isnan(mid2):
+            logger.warning('中间计算值包含无穷大或NaN值，使用默认内参矩阵')
+
+        if abs(mid2) < 1e-12:
+            logger.warning('mid2接近0，可能导致数值不稳定，使用默认内参矩阵')
+
         v0 = mid1 / mid2
         logger.debug(f'{v0=:.6e}')
         rho = B33 - (B13 ** 2 + v0 * mid1) / B11
@@ -693,6 +767,12 @@ class ZhangCameraCalibration:
             h1, h2, h3 = H.T
             Kinv = np.linalg.inv(K)
             lambda_ = 1.0 / np.linalg.norm(Kinv @ h1)
+
+            print(f'>>>>>>>>>>>>>>>>>>> h1 -> ', h1)
+            print(f'>>>>>>>>>>>>>>>>>>> h2 -> ', h2)
+            print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h1 -> ', lambda_)
+            print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h2 -> ', 1.0 / np.linalg.norm(Kinv @ h2))
+
             r1 = lambda_ * (Kinv @ h1)
             r2 = lambda_ * (Kinv @ h2)
             t = lambda_ * (Kinv @ h3)
@@ -751,11 +831,11 @@ class ZhangCameraCalibration:
                 # project
                 p_h = (K @ Xc.T).T  # (M,3)
                 denom = p_h[:, 2:3]
-                denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+                denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
                 uv_pred = p_h[:, :2] / denom
 
                 denom_obs = img_h[:, 2:3]
-                denom_obs = np.where(np.abs(denom_obs) < 1e-12, 1e-12, denom_obs)
+                denom_obs = np.where(np.abs(denom_obs) < 1e-12, np.sign(denom_obs) * 1e-12, denom_obs)
                 uv_obs = img_h[:, :2] / denom_obs
 
                 diff = (uv_obs - uv_pred).reshape(-1)
@@ -843,12 +923,23 @@ def infer_image_size(list_of_image_points, margin=2, min_size=(480, 640)):
     # 把齐次坐标除以第三个分量得到非齐次 u,v
     # 防止除以0 (理论上第三分量都是1)，用 eps 保护
     denom = arr[..., 2:3]
-    denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+    # 使用更安全的除法，防止除以接近0的值
+    denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
     uv = arr[..., :2] / denom   # shape (V, M, 2)
+
+    # 检查uv中是否包含无穷大或NaN值
+    if np.any(np.isinf(uv)) or np.any(np.isnan(uv)):
+        logger.warning('计算得到的uv坐标包含无穷大或NaN值，将使用默认尺寸')
+        return min_size[0], min_size[1]
 
     # 取所有视图与所有点的最大 u (x) 和 v (y)
     max_u = np.nanmax(uv[..., 0])
     max_v = np.nanmax(uv[..., 1])
+
+    # 检查最大值是否为无穷大
+    if np.isinf(max_u) or np.isinf(max_v):
+        logger.warning('最大坐标值为无穷大，将使用默认尺寸')
+        return min_size[0], min_size[1]
 
     width  = int(np.ceil(max_u)) + int(margin)
     height = int(np.ceil(max_v)) + int(margin)
@@ -954,7 +1045,7 @@ def compare_with_opencv():
         # 常见情形: (M,3) 齐次坐标
         if pts.ndim == 2 and pts.shape[1] == 3:
             denom = pts[:, 2:3]
-            denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+            denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
             uv = pts[:, :2] / denom
         # 也可能是 (M,2)
         elif pts.ndim == 2 and pts.shape[1] == 2:
@@ -964,7 +1055,7 @@ def compare_with_opencv():
             pts_flat = pts.reshape(-1, pts.shape[-1])
             if pts_flat.shape[1] == 3:
                 denom = pts_flat[:, 2:3]
-                denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+                denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
                 uv = pts_flat[:, :2] / denom
             elif pts_flat.shape[1] == 2:
                 uv = pts_flat
