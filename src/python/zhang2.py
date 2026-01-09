@@ -1249,7 +1249,7 @@ def run():
 
 
 if __name__ == '__main__':
-    # init()  # 生成模型点和像素点
+    init()  # 生成模型点和像素点
 
     # 用我自己实现的算法，求解相机内参矩阵
     saved_data = load_mat('zhang.mat')
@@ -1261,5 +1261,5 @@ if __name__ == '__main__':
     logger.debug('\n' * 10 + '=' * 100)
     run()
 
-    # 使用 opencv 现有的算法，求解相机内参矩阵
-    compare_with_opencv()
+    # # 使用 opencv 现有的算法，求解相机内参矩阵
+    # compare_with_opencv()
