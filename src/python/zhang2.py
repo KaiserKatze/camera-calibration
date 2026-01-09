@@ -403,6 +403,23 @@ class CameraModel:
         logger.debug(f'真实的相机内参矩阵 K=\n{self.K}')
         logger.debug(f'真实的基本矩阵 B=\n{Kinv.T @ Kinv}')
 
+    @staticmethod
+    def make_homography(intrinsic_matrix: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
+        """
+        依据相机内参矩阵、旋转矩阵、平移向量，计算“单应性”。
+        这里产出的“单应性”只能与 Z=0 的模型点坐标相乘！
+
+        :param intrinsic_matrix: 相机内参矩阵
+        :type intrinsic_matrix: np.ndarray
+        :param rotation: 旋转矩阵
+        :type rotation: np.ndarray
+        :param translation: 平移向量
+        :type translation: np.ndarray
+        :return: 单应性
+        :rtype: ndarray[_AnyShape, dtype[Any]]
+        """
+        return intrinsic_matrix @ np.hstack((rotation[:, :2], translation))
+
     def _arbitrary_project(self, model_2d_homo: np.ndarray,
                            rotation: np.ndarray,
                            translation: np.ndarray,
@@ -422,7 +439,7 @@ class CameraModel:
         # logger.debug('\n' * 5)
         # logger.debug(f'模型点的二维齐次坐标 model_2d_homo=\n{model_2d_homo[:5]}')
         # 计算单应性 H
-        H = self.K @ np.hstack((rotation[:, :2], translation))
+        H = self.make_homography(self.K, rotation, translation)
         assert H.shape == (3, 3)
         logger.debug(f'真实的旋转矩阵 R=\n{rotation}\n\tdet(R)={np.round(np.linalg.det(rotation), 4)}')
         logger.debug(f'真实的平移向量 T=\n{translation}')
