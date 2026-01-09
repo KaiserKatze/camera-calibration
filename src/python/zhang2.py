@@ -471,10 +471,10 @@ class CameraModel:
         """
         可视化第 view_index 个视图的模型点与投影点
         """
+        print('objpoints=\n', objpoints)
+        print('imgpoints=\n', imgpoints[view_index])
         objpoints = objpoints[:, 0:2]
         imgpoints = imgpoints[view_index, :, 0:2]
-        print('objpoints=\n', objpoints)
-        print('imgpoints=\n', imgpoints)
         obj_obs = objpoints.reshape(-1, 2)
         img_obs = imgpoints.reshape(-1, 2)
         assert img_obs.shape[0] == obj_obs.shape[0]
