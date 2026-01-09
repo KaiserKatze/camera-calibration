@@ -490,7 +490,8 @@ class CameraModel:
                 'g-', linewidth=0.5,
             )
         plt.gca().invert_yaxis()  # 图像坐标通常原点在左上
-        plt.legend()
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        plt.tight_layout()
         plt.title(f"第 {view_index} 个机位下 模型点-像素点 映射关系")
         path_fig = f'fig-{view_index}-projection.png'
         print('saving figure to:', os.path.abspath(path_fig))
