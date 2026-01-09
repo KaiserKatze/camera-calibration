@@ -519,8 +519,10 @@ class ZhangCameraCalibration:
         #     [Mn.T, 0, - un * Mn.T],
         #     [0, Mn.T, - vn * Mn.T],
         # ]
-        assert model.shape[1] == pixel.shape[1] == 3, '必须输入模型点、像素点的二维齐次坐标!'
-        assert model.shape[0] == pixel.shape[0] > 6, '样本数量太少!'
+        if not (model.shape[1] == pixel.shape[1] == 3):
+            raise ValueError('必须输入模型点、像素点的二维齐次坐标!')
+        if not (model.shape[0] == pixel.shape[0] > 6):
+            logger.warning('样本数量太少!')
         model_h = model.shape[0]
         # 检查输入是否包含无穷大或NaN值
         if np.any(np.isinf(model)) or np.any(np.isnan(model)) or np.any(np.isinf(pixel)) or np.any(np.isnan(pixel)):
