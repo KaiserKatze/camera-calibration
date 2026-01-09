@@ -838,7 +838,14 @@ class ZhangCameraCalibration:
             return np.concatenate(residuals).astype(np.float64)
 
         def homography_reprojection_rmse(x: np.ndarray) -> float:
-            return np.sqrt(np.mean(np.sum(residuals_joint(x).reshape((-1, 2))**2, axis=1)))
+            #     err = imgp - projected
+            #     total_error += np.sum(np.linalg.norm(err, axis=1) ** 2)
+            #     total_points += objp.shape[0]
+            # rmse = np.sqrt(total_error / total_points)
+            err_vec = residuals_joint(x).reshape((-1, 2))
+            err_norm2 = np.linalg.norm(err_vec, axis=1) ** 2
+            err_mean = np.mean(err_norm2)
+            return np.sqrt(err_mean)
 
         x0 = pack_params(K, rvecs_init, tvecs_init)
 
