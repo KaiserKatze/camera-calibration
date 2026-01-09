@@ -4,6 +4,10 @@ docs/
 *.npz
 *.jpg
 *.png
+*.npy
+*.mat
+*.m
+*.docx
 
 
 
