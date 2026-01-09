@@ -466,8 +466,8 @@ class CameraModel:
         """
         可视化第 view_index 个视图的模型点与投影点
         """
-        print('objpoints=\n', objpoints)
-        print('imgpoints=\n', imgpoints[view_index])
+        # print('objpoints=\n', objpoints)
+        # print('imgpoints=\n', imgpoints[view_index])
         objpoints = objpoints[:, 0:2]
         imgpoints = imgpoints[view_index, :, 0:2]
         obj_obs = objpoints.reshape(-1, 2)
@@ -1227,7 +1227,8 @@ def run():
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
 
-    CameraModel.visualize_projection(model_points, list_of_image_points, 0)
+    for idx in range(len(list_of_image_points)):
+        CameraModel.visualize_projection(model_points, list_of_image_points, idx)
 
     realK = saved_data['real_intrinsic_matrix']
     logger.debug(f'可用校正图像数量: {len(list_of_image_points)}')
@@ -1267,5 +1268,5 @@ if __name__ == '__main__':
     logger.debug('\n' * 10 + '=' * 100)
     run()
 
-    # # 使用 opencv 现有的算法，求解相机内参矩阵
-    # compare_with_opencv()
+    # 使用 opencv 现有的算法，求解相机内参矩阵
+    compare_with_opencv()
