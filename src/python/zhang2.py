@@ -277,30 +277,6 @@ def homo2nonhomo(points: np.ndarray):
     return points
 
 
-def homography_reprojection_rmse(H: np.ndarray, model_2d_homo: np.ndarray, image_points_homo: np.ndarray) -> float:
-    """
-    计算单个单应性 H 下的重投影 RMSE（像素）。
-    model_2d_homo: shape (M,3)
-    image_points_homo: shape (M,3)
-    返回 RMSE（float）
-    """
-    # 预测像素齐次 coords
-    pred_h = (H @ model_2d_homo.T).T  # shape (M,3)
-    denom_pred = pred_h[:, 2:3]
-    # 防止除以接近0的值
-    denom_pred = np.where(np.abs(denom_pred) < 1e-12, np.sign(denom_pred) * 1e-12, denom_pred)
-    uv_pred = pred_h[:, :2] / denom_pred
-
-    denom_obs = image_points_homo[:, 2:3]
-    # 防止除以接近0的值
-    denom_obs = np.where(np.abs(denom_obs) < 1e-12, np.sign(denom_obs) * 1e-12, denom_obs)
-    uv_obs = image_points_homo[:, :2] / denom_obs
-
-    err = uv_obs - uv_pred
-    rmse = np.sqrt(np.mean(np.sum(err**2, axis=1)))
-    return float(rmse)
-
-
 def assert_condition_number(list_of_homography: list[np.ndarray], cond_threshold: float = 1e6) -> list[int]:
     """
     根据单应性 H 的条件数筛选视图
