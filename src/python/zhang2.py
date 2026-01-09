@@ -377,9 +377,6 @@ class CameraModel:
             [0, beta, v0],
             [0, 0, 1],
         ], dtype=np.float32)
-        Kinv = np.linalg.inv(self.K)
-        logger.debug(f'真实的相机内参矩阵 K=\n{self.K}')
-        logger.debug(f'真实的基本矩阵 B=\n{Kinv.T @ Kinv}')
 
     @staticmethod
     def make_homography(intrinsic_matrix: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
@@ -888,7 +885,7 @@ class ZhangCameraCalibration:
 
         print(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt)}')
 
-        return K_opt
+        return K_opt # / K_opt[2, 2]
 
 
 
@@ -1264,6 +1261,12 @@ def run():
 
 if __name__ == '__main__':
     # init()  # 生成模型点和像素点
+
+    saved_data = load_mat('zhang.mat')
+    realK = saved_data['real_intrinsic_matrix']
+    realKinv = np.linalg.inv(realK)
+    logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
+    logger.debug(f'真实的基本矩阵 B=\n{realKinv.T @ realKinv}')
 
     logger.debug('\n' * 10 + '=' * 100)
     run()
