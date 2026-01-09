@@ -864,7 +864,13 @@ class ZhangCameraCalibration:
 
             return np.concatenate(residuals).astype(np.float64)
 
+        def homography_reprojection_rmse(x: np.ndarray) -> float:
+            return np.sqrt(np.mean(np.sum(residuals_joint(x).reshape((-1, 2))**2, axis=1)))
+
         x0 = pack_params(K, rvecs_init, tvecs_init)
+
+        print(f'优化之前的重投影误差：\n\t{homography_reprojection_rmse(x0)}')
+
         optimize_result = scipy.optimize.least_squares(
             residuals_joint,
             x0=x0,
@@ -879,6 +885,8 @@ class ZhangCameraCalibration:
         # print(f'{optimize_result=}')
         x_opt = optimize_result.x
         K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, n_views)
+
+        print(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt)}')
 
         return K_opt
 
