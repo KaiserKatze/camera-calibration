@@ -645,6 +645,27 @@ class ZhangCameraCalibration:
                 h(i, 3) * h(j, 3),
             ])
 
+        # # 过滤掉有问题的单应性矩阵
+        # valid_indices = []
+        # valid_homographies = []
+        # valid_pixels = []
+
+        # for i, (homography, pixel) in enumerate(zip(list_of_homography, list_of_pixel_2d_homo)):
+        #     # 检查单应性矩阵是否有效
+        #     if np.any(np.isinf(homography)) or np.any(np.isnan(homography)) or np.linalg.cond(homography) > 1e12:
+        #         logger.warning(f'跳过第{i}个视图，因为单应性矩阵无效')
+        #         continue
+        #     # 检查像素点是否有效
+        #     if np.any(np.isinf(pixel)) or np.any(np.isnan(pixel)):
+        #         logger.warning(f'跳过第{i}个视图，因为像素点包含无效值')
+        #         continue
+        #     valid_indices.append(i)
+        #     valid_homographies.append(homography)
+        #     valid_pixels.append(pixel)
+
+        # list_of_homography = valid_homographies
+        # list_of_pixel_2d_homo = valid_pixels
+
         V = np.vstack(list([
             v_constraint(homography, 1, 2),                                     # v_12.T
             v_constraint(homography, 1, 1) - v_constraint(homography, 2, 2),    # v_11.T - v_22.T
@@ -922,6 +943,11 @@ def infer_image_size(list_of_image_points, margin=2, min_size=(480, 640)):
         arr = pts[np.newaxis, ...]
     else:
         raise ValueError(f'unrecognized shape for list_of_image_points: {pts.shape}')
+
+    # # 检查数据是否包含无穷大或NaN值
+    # if np.any(np.isinf(arr)) or np.any(np.isnan(arr)):
+    #     logger.warning('输入图像点包含无穷大或NaN值，将使用默认尺寸')
+    #     return min_size[0], min_size[1]
 
     # 把齐次坐标除以第三个分量得到非齐次 u,v
     # 防止除以0 (理论上第三分量都是1)，用 eps 保护
