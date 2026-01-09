@@ -301,54 +301,32 @@ def homography_reprojection_rmse(H: np.ndarray, model_2d_homo: np.ndarray, image
     return float(rmse)
 
 
-def filter_homographies(list_of_homography, list_of_image_points, model_2d_homo,
-                        rmse_threshold: float = 5.0,
-                        cond_threshold: float = 1e6):
+def assert_condition_number(list_of_homography: list[np.ndarray], cond_threshold: float = 1e6) -> list[int]:
     """
-    根据单应性重投影 RMSE 和 H 的 condition number 筛选视图。
-    返回筛选后的 (homographies, image_points)
-    参数:
-      rmse_threshold: 若单视图 RMSE > 阈值（像素），则剔除该视图
-      cond_threshold: 若 np.linalg.cond(H) > 阈值，也剔除
-    """
-    keep_h = []
-    keep_img = []
-    for H, img in zip(list_of_homography, list_of_image_points):
-        H = H.astype(np.float64)
-        img = np.asarray(img, dtype=np.float64)
-        # rmse
-        try:
-            rmse = homography_reprojection_rmse(H, model_2d_homo, img)
-        except Exception:
-            # 出错则丢弃
-            continue
+    根据单应性 H 的条件数筛选视图
 
-        # cond number (对 H 或对 H[:,:2] 的列做条件数检测)
+    :param list_of_homography: 单应性列表
+    :type list_of_homography: list[np.ndarray]
+    :param cond_threshold: 条件数
+    :type cond_threshold: float
+    :return: 需要保留的单应性在列表中的序号
+    :rtype: list[int]
+    """
+
+    kept_idx = []
+    for idx, homography in enumerate(list_of_homography):
+        # 计算条件数
         try:
-            cond_H = np.linalg.cond(H)
+            cond_H = np.linalg.cond(homography)
         except Exception:
             cond_H = np.inf
 
-        # 也可检查 H 的奇异值差距
-        _, svals, _ = svd(H)
-        s_ratio = float(svals[0] / (svals[-1] + 1e-16))
+        if cond_H < cond_threshold:
+            kept_idx.append(idx)
 
-        # 判定是否保留
-        keep = True
-        if rmse > rmse_threshold:
-            logger.debug(f'单应性的 {rmse=:.6e} > {rmse_threshold=:.6e}，丢弃!')
-            keep = False
-        if cond_H > cond_threshold:
-            logger.debug(f'单应性的 {cond_H=:.6e} > {cond_threshold=:.6e}，丢弃!')
-            keep = False
-        # 若奇异值跨度过大也剔除
-        if s_ratio > 1e8:
-            keep = False
-
-        if keep:
-            keep_h.append(H)
-            keep_img.append(img)
-    return keep_h, keep_img
+    remain_ratio = len(kept_idx) / max(1, len(list_of_homography))
+    logger.debug(f'条件数筛选剩余率 = {remain_ratio * 100:.2f}%')
+    return kept_idx
 
 
 class Rotation:
@@ -688,7 +666,7 @@ class ZhangCameraCalibration:
 
         # # 视图筛选（剔除病态或重投影误差大的视图）
         # logger.debug(f'筛选前有 {len(list_of_homography)} 个视图')
-        # list_of_homography_filtered, list_of_pixel_2d_homo_filtered = filter_homographies(
+        # list_of_homography_filtered, list_of_pixel_2d_homo_filtered = assert_condition_number(
         #     list_of_homography, list_of_pixel_2d_homo, model_2d_homo,
         #     rmse_threshold=5.0, cond_threshold=1e6
         # )
@@ -1213,7 +1191,7 @@ def print_homography_condition(list_of_homography: list[np.ndarray]):
     logger.debug(f'经过归一化以后的单应性的条件数，最小值 = {min_cond_homography:.6e}，最大值 = {max_cond_homography:.6e}')
 
 
-def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.ndarray):
+def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.ndarray) -> list[int]:
     """
     返回被判定为 quasi-affine 的视图索引列表（indices），以及按这些索引筛选后的 homographies。
     这样可以确保后续用到的图像点集合与单应性列表一一对应。
