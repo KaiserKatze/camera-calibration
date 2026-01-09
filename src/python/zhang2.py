@@ -363,9 +363,9 @@ class Rotation:
 
     @classmethod
     def randomize(cls):
-        Rx = np.random.uniform(-60, 60)
-        Ry = np.random.uniform(-60, 60)
-        Rz = np.random.uniform(-60, 60)
+        Rx = np.random.uniform(-5, 5)
+        Ry = np.random.uniform(-5, 5)
+        Rz = np.random.uniform(-5, 5)
         return cls(Rx, Ry, Rz)
 
 
@@ -381,9 +381,9 @@ class Translation:
 
     @classmethod
     def randomize(cls):
-        Tx = np.random.uniform(-100, 100)
-        Ty = np.random.uniform(-100, 100)
-        Tz = np.random.uniform(1000, 1500)
+        Tx = np.random.uniform(-10, 10)
+        Ty = np.random.uniform(-10, 10)
+        Tz = np.random.uniform(10, 20)
         return cls(Tx, Ty, Tz)
 
 
@@ -395,7 +395,8 @@ class CameraModel:
         self.K = np.array([
             # [alpha, -alpha / np.tan(theta), u0],
             [alpha, 0, u0],
-            [0, beta / np.sin(theta), v0],
+            # [0, beta / np.sin(theta), v0],
+            [0, beta, v0],
             [0, 0, 1],
         ], dtype=np.float32)
         print('内参矩阵 K=\n', self.K)
@@ -423,16 +424,15 @@ class CameraModel:
         # 计算单应性 H
         H = self.K @ np.hstack((rotation[:, :2], translation))
         assert H.shape == (3, 3)
-        print('单应性 H=\n', H)
+        logger.debug(f'真实的旋转矩阵 R=\n{rotation}\n\tdet(R)={np.round(np.linalg.det(rotation), 4)}')
+        logger.debug(f'真实的平移向量 T=\n{translation}')
+        logger.debug(f'真实的单应性 H=\n{H}')
 
         # 检查H矩阵是否接近奇异（条件数过大）
         cond_H = np.linalg.cond(H)
         if cond_H > 1e12:
             logger.warning(f'单应性矩阵条件数过大: {cond_H:.6e}, 可能导致数值不稳定')
 
-        # logger.debug(f'真实的旋转矩阵 R=\n{rotation}')
-        # logger.debug(f'真实的平移向量 T=\n{translation}')
-        # logger.debug(f'真实的单应性 H=\n{H}')
         # 计算像素点的齐次坐标
         pixel_2d_homo = model_2d_homo @ H.T
 
@@ -556,7 +556,7 @@ class ZhangCameraCalibration:
         assert len(m) == 9  # 可以估计单应性的全部三个行向量
         estimated_homography = m.reshape((3,3))
 
-        print('估计的单应性 H=\n', estimated_homography)
+        logger.debug(f'估计的单应性 H=\n{estimated_homography}')
 
         # 检查估计的单应性是否包含无穷大或NaN值
         if np.any(np.isinf(estimated_homography)) or np.any(np.isnan(estimated_homography)):
