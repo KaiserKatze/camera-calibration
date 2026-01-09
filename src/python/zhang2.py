@@ -381,8 +381,8 @@ class Translation:
 
     @classmethod
     def randomize(cls):
-        Tx = np.random.uniform(-10, 10)
-        Ty = np.random.uniform(-10, 10)
+        Tx = np.random.uniform(-5, 5)
+        Ty = np.random.uniform(-5, 5)
         Tz = np.random.uniform(10, 20)
         return cls(Tx, Ty, Tz)
 
@@ -399,9 +399,9 @@ class CameraModel:
             [0, beta, v0],
             [0, 0, 1],
         ], dtype=np.float32)
-        print('内参矩阵 K=\n', self.K)
         Kinv = np.linalg.inv(self.K)
-        print('基本矩阵 B=\n', Kinv.T @ Kinv)
+        logger.debug(f'真实的相机内参矩阵 K=\n{self.K}')
+        logger.debug(f'真实的基本矩阵 B=\n{Kinv.T @ Kinv}')
 
     def _arbitrary_project(self, model_2d_homo: np.ndarray,
                            rotation: np.ndarray,
@@ -430,6 +430,7 @@ class CameraModel:
 
         # 检查H矩阵是否接近奇异（条件数过大）
         cond_H = np.linalg.cond(H)
+        logger.debug(f'单应性 H 条件数=\n{cond_H}')
         if cond_H > 1e12:
             logger.warning(f'单应性矩阵条件数过大: {cond_H:.6e}, 可能导致数值不稳定')
 
@@ -440,29 +441,25 @@ class CameraModel:
         if np.any(np.isinf(pixel_2d_homo)) or np.any(np.isnan(pixel_2d_homo)):
             raise ValueError('投影结果包含无穷大或NaN值')
 
-        # 计算像素点的非齐次坐标
-        pixel_2d = pixel_2d_homo[:, :2] / pixel_2d_homo[:, 2:3]
-
-        # print('模型点的齐次坐标 model_2d_homo=\n', model_2d_homo)
-        # print('像素点的齐次坐标 pixel_2d_homo=\n', pixel_2d_homo)
-        # print('像素的非齐次坐标 pixel_2d=\n', pixel_2d)
-
         if noise is not None:
+            # 计算像素点的非齐次坐标
+            pixel_w = pixel_2d_homo[:, 2:3]
+            pixel_2d_nonhomo = pixel_2d_homo[:, :2] / pixel_w
             # 给像素点的非齐次坐标添加高斯噪声（均值=0，标准差=0.5 像素）
-            noise = np.random.normal(0, 0.5, pixel_2d.shape)
-            pixel_2d += noise
-        # 返回像素点的齐次坐标
-        num_points = pixel_2d.shape[0]
-        ones = np.ones((num_points, 1))
-        pixel_2d_homo = np.hstack((pixel_2d, ones))
-        assert pixel_2d_homo.shape[1] == 3
+            logger.debug('正在添加高斯噪声 ...')
+            noise = np.random.normal(0, 0.5, pixel_2d_nonhomo.shape)
+            pixel_2d_nonhomo += noise
+            # 重新组装像素点的齐次坐标
+            pixel_2d_homo = np.hstack((pixel_2d_nonhomo * pixel_w, pixel_w))
+
+        assert pixel_2d_homo.shape == model_2d_homo.shape
         return model_2d_homo, pixel_2d_homo, rotation, translation, H
 
-    def randomly_project(self, model_2d_homo: np.ndarray):
+    def randomly_project(self, model_2d_homo: np.ndarray, noise=None):
         # 随机生成旋转矩阵和位移向量
         rotation = Rotation.randomize().R
         translation = Translation.randomize().T
-        return self._arbitrary_project(model_2d_homo, rotation, translation)
+        return self._arbitrary_project(model_2d_homo, rotation, translation, noise)
 
     def identity_project(self, model_2d_homo: np.ndarray):
         rotation = np.identity(3, dtype=np.float64)
