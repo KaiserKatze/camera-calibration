@@ -959,13 +959,22 @@ def infer_image_size(list_of_image_points, margin=2, min_size=(480, 640)):
 
 
 def init():
+    camera_theta = np.radians(90)
+    # projection_model = CameraModel(
+    #     d=100,
+    #     a=400,
+    #     b=300,
+    #     theta=np.radians(90.5),  # 将角度制的 90.5° 转为弧度制
+    #     u0=320,
+    #     v0=240,
+    # )
     projection_model = CameraModel(
         d=100,
-        a=400,
-        b=300,
-        theta=np.radians(90.5),  # 将角度制的 90.5° 转为弧度制
-        u0=320,
-        v0=240,
+        a=100,
+        b=100,
+        theta=camera_theta,  # 将角度制的 90.5° 转为弧度制
+        u0=0,
+        v0=0,
     )
     model_points = generate_model_points()
     n_photos = 20
@@ -1178,6 +1187,7 @@ def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.n
         seq = model_points @ h_inv_r3.T
         seq = np.sign(seq)
         rate = abs(seq.sum()) / len(seq)
+        logger.debug(f'单应性拟仿射性 = {rate}')
         if rate > .95:
             kept_idx.append(idx)
     remain_ratio = len(kept_idx) / max(1, len(list_of_homography))
@@ -1202,7 +1212,6 @@ def run():
                 model_points, image_points
             )
             list_of_homography.append(homography)
-
         # 利用单应性的 quasi-affine 假设，进行筛选
         kept_idx = assert_quasi_affine(list_of_homography, model_points)
         # kept_idx = kept_idx[:10]
@@ -1226,14 +1235,7 @@ def run():
 
 
 if __name__ == '__main__':
-    init()  # 生成模型点和像素点
-
-    # 用我自己实现的算法，求解相机内参矩阵
-    saved_data = load_mat('zhang.mat')
-    realK = saved_data['real_intrinsic_matrix']
-    realKinv = np.linalg.inv(realK)
-    logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
-    logger.debug(f'真实的基本矩阵 =\n{realKinv.T @ realKinv}')
+    # init()  # 生成模型点和像素点
 
     logger.debug('\n' * 10 + '=' * 100)
     run()
