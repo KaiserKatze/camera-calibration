@@ -1212,8 +1212,7 @@ def run():
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
 
-    for index_image_points in range(len(list_of_image_points)):
-        CameraModel.visualize_projection(model_points, list_of_image_points, index_image_points)
+    CameraModel.visualize_projection(model_points, list_of_image_points, 0)
 
     realK = saved_data['real_intrinsic_matrix']
     logger.debug(f'可用校正图像数量: {len(list_of_image_points)}')
