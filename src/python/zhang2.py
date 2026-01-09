@@ -465,6 +465,41 @@ class CameraModel:
         # plt.show()
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
 
+    @staticmethod
+    def visualize_reprojection(objpoints: np.ndarray, imgpoints: list[np.ndarray],
+                               estimated_intrinsic_matrix: np.ndarray,
+                               rvecs: list[np.ndarray], tvecs: list[np.ndarray],
+                               view_index: int = 0):
+        K = estimated_intrinsic_matrix
+        rv = rvecs[view_index]
+        tv = tvecs[view_index]
+        tv = tv.reshape(3, 1)
+        R = rodrigues(rv)  # 利用旋转参数 rv 构造旋转矩阵 R。
+        H = CameraModel.make_homography(K, R, tv)  # 利用相机内参矩阵 K、旋转矩阵 R 和平移向量 tv 构造单应性 H。
+        reprojection_points_homo = objpoints @ H.T  # 重投影，产出像素点的齐次坐标
+        print('rpipoints=\n', reprojection_points_homo)
+        print('imgpoints=\n', imgpoints[view_index])
+        rpipoints = reprojection_points_homo[:, 0:2]
+        imgpoints = imgpoints[view_index][:, 0:2]
+        assert rpipoints.shape[0] == imgpoints.shape[0]
+
+        plt.figure()
+        plt.scatter(imgpoints[:, 0], imgpoints[:, 1], c='r', marker='o', label='观测的像素点')
+        plt.scatter(rpipoints[:, 0], rpipoints[:, 1], c='b', marker='x', label='重投影像素点')
+        for i in range(imgpoints.shape[0]):
+            plt.plot(
+                [imgpoints[i, 0], rpipoints[i, 0]],
+                [imgpoints[i, 1], rpipoints[i, 1]],
+                'g-', linewidth=0.5,
+            )
+        plt.gca().invert_yaxis()  # 图像坐标通常原点在左上
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        plt.tight_layout()
+        plt.title(f"第 {view_index} 个机位下 重投影 映射关系")
+        path_fig = f'fig-{view_index}-reprojection.png'
+        print('saving figure to:', os.path.abspath(path_fig))
+        plt.savefig(path_fig, dpi=150, bbox_inches='tight')
+
 
 class ZhangCameraCalibration:
     @classmethod
@@ -867,6 +902,9 @@ class ZhangCameraCalibration:
         K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, n_views)
 
         print(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt)}')
+
+        for idx in range(len(list_of_pixel_2d_homo)):
+            CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K_opt, rvecs_opt, tvecs_opt, idx)
 
         return K_opt # / K_opt[2, 2]
 
