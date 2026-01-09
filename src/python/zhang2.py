@@ -620,6 +620,24 @@ class ZhangCameraCalibration:
         A_pd = (eigen_vectors * eigen_values_clipped) @ eigen_vectors.T
         return 0.5 * (A_pd + A_pd.T)
 
+    @staticmethod
+    def approximate_rotation_matrix(matrix_Q: np.ndarray):
+        """
+        利用基本矩阵计算得到的“旋转矩阵” Q 可能不符合旋转矩阵的正交性（Q^T Q = I），
+        因此需要在 F 范数意义下，将它映射为一个“最佳的”旋转矩阵 R 使得 R^T R = I 成立。
+
+        :param matrix_Q: 现有的“旋转矩阵”
+        :type matrix_Q: np.ndarray
+        """
+        U, _, Vt = svd(matrix_Q)
+        matrix_R = U @ Vt
+        # Ensure det positive
+        if (det_R := np.linalg.det(matrix_R)) < 0:
+            logger.warning(f'近似旋转矩阵 R=\n{matrix_R} 的行列式 {det_R:.4f} < 0')
+            U[:, -1] *= -1
+            matrix_R = U @ Vt
+        return matrix_R
+
     @classmethod
     def extract_intrinsic_parameters_from_homography(cls, list_of_homography: typing.List[np.ndarray],
                                                      model_2d_homo: np.ndarray,
@@ -663,7 +681,7 @@ class ZhangCameraCalibration:
 
         # 检查V矩阵是否包含无穷大或NaN值
         if np.any(np.isinf(V)) or np.any(np.isnan(V)):
-            logger.warning('矩阵V包含无穷大或NaN值，使用默认内参矩阵')
+            logger.warning('矩阵V包含无穷大或NaN值!')
 
         # 计算矩阵 V 的条件数
         # print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
@@ -768,24 +786,25 @@ class ZhangCameraCalibration:
         for H in list_of_homography:
             h1, h2, h3 = H.T
             Kinv = np.linalg.inv(K)
-            lambda_ = 1.0 / np.linalg.norm(Kinv @ h1)
+            lambda1 = 1.0 / np.linalg.norm(Kinv @ h1)
+            lambda2 = 1.0 / np.linalg.norm(Kinv @ h2)
 
-            print(f'>>>>>>>>>>>>>>>>>>> h1 -> ', h1)
-            print(f'>>>>>>>>>>>>>>>>>>> h2 -> ', h2)
-            print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h1 -> ', lambda_)
-            print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h2 -> ', 1.0 / np.linalg.norm(Kinv @ h2))
+            if abs(lambda1 - lambda2) > 1e-6:
+                logger.error('尺度因子差距过大!')
 
-            r1 = lambda_ * (Kinv @ h1)
-            r2 = lambda_ * (Kinv @ h2)
-            t = lambda_ * (Kinv @ h3)
+            # print(f'>>>>>>>>>>>>>>>>>>> h1 -> ', h1)
+            # print(f'>>>>>>>>>>>>>>>>>>> h2 -> ', h2)
+            # print(f'>>>>>>>>>>>>>>>>>>> h1 - h2 -> ', h1 - h2)
+            # print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h1 -> ', lambda1)
+            # print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h2 -> ', lambda2)
+            # print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h1 - Kinv @ h2 -> ', lambda1 - lambda2)
+
+            r1 = lambda1 * (Kinv @ h1)
+            r2 = lambda1 * (Kinv @ h2)
+            t = lambda1 * (Kinv @ h3)
             r3 = np.cross(r1, r2)
             R_approx = np.column_stack([r1, r2, r3])
-            U, _, Vt = svd(R_approx)
-            R = U @ Vt
-            # Ensure det positive
-            if np.linalg.det(R) < 0:
-                U[:, -1] *= -1
-                R = U @ Vt
+            R = cls.approximate_rotation_matrix(R_approx)
             rvec = inv_rodrigues(R)
             rvecs_init.append(rvec)
             tvecs_init.append(t)
