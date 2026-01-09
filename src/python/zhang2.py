@@ -1221,11 +1221,11 @@ def run():
         list_of_homography = []
         # 为各个不同视图分别计算单应性
         for image_points in list_of_image_points:
-            list_of_homography.append(
-                ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(
-                    model_points, image_points
-                )
+            homography = ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(
+                model_points, image_points
             )
+            list_of_homography.append(homography)
+
         # 利用单应性的 quasi-affine 假设，进行筛选
         kept_idx = assert_quasi_affine(list_of_homography, model_points)
         # kept_idx = kept_idx[:10]
