@@ -632,7 +632,7 @@ class ZhangCameraCalibration:
         把相机内部参数逐个提取出来
         """
 
-        assert len(list_of_homography) == len(list_of_pixel_2d_homo)
+        assert len(list_of_homography) == len(list_of_pixel_2d_homo) > 1, '单应性列表长度应大于零!'
 
         def v_constraint(homography: np.ndarray, i: int, j: int):
             def h(x: int, y: int):
@@ -646,27 +646,6 @@ class ZhangCameraCalibration:
                 h(i, 3) * h(j, 2) + h(i, 2) * h(j, 3),
                 h(i, 3) * h(j, 3),
             ])
-
-        # # 过滤掉有问题的单应性矩阵
-        # valid_indices = []
-        # valid_homographies = []
-        # valid_pixels = []
-
-        # for i, (homography, pixel) in enumerate(zip(list_of_homography, list_of_pixel_2d_homo)):
-        #     # 检查单应性矩阵是否有效
-        #     if np.any(np.isinf(homography)) or np.any(np.isnan(homography)) or np.linalg.cond(homography) > 1e12:
-        #         logger.warning(f'跳过第{i}个视图，因为单应性矩阵无效')
-        #         continue
-        #     # 检查像素点是否有效
-        #     if np.any(np.isinf(pixel)) or np.any(np.isnan(pixel)):
-        #         logger.warning(f'跳过第{i}个视图，因为像素点包含无效值')
-        #         continue
-        #     valid_indices.append(i)
-        #     valid_homographies.append(homography)
-        #     valid_pixels.append(pixel)
-
-        # list_of_homography = valid_homographies
-        # list_of_pixel_2d_homo = valid_pixels
 
         V = np.vstack(list([
             v_constraint(homography, 1, 2),                                     # v_12.T
