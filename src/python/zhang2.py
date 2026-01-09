@@ -862,27 +862,26 @@ class ZhangCameraCalibration:
             K = K.astype(np.float64)
             residuals = []
 
-            for rv, tv, img_h in zip(rvecs, tvecs, list_of_pixel_2d_homo):
-                R = rodrigues(rv)  # rv shape (3,)
-                # model points on plane z=0 in world coords are model_2d_homo (X,Y,1)
-                # camera coords: Xc = R[:, :2] * [X,Y] + t  <-- because model z=1 entry corresponds to affine
-                # but safer: treat model as (X,Y,0) in 3D and do full R @ [X,Y,0] + t
-                M = model_2d_homo[:, :2]  # (M,2)
-                # Compose 3D points with z=0
-                X3 = np.hstack([M, np.zeros((M.shape[0], 1), dtype=np.float64)])  # (M,3)
-                Xc = (R @ X3.T).T + np.asarray(tv).reshape(1,3)  # (M,3)
-
-                # project
-                p_h = (K @ Xc.T).T  # (M,3)
-                denom = p_h[:, 2:3]
-                denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
-                uv_pred = p_h[:, :2] / denom
-
-                denom_obs = img_h[:, 2:3]
-                denom_obs = np.where(np.abs(denom_obs) < 1e-12, np.sign(denom_obs) * 1e-12, denom_obs)
-                uv_obs = img_h[:, :2] / denom_obs
-
-                diff = (uv_obs - uv_pred).reshape(-1)
+            for rv, tv, pixel_2d_homo in zip(rvecs, tvecs, list_of_pixel_2d_homo):
+                tv = tv.reshape(3, 1)
+                R = rodrigues(rv)  # 利用旋转参数 rv 构造旋转矩阵 R。
+                H = CameraModel.make_homography(K, R, tv)  # 利用相机内参矩阵 K、旋转矩阵 R 和平移向量 tv 构造单应性 H。
+                reprojection_points_homo = model_2d_homo @ H.T  # 重投影，产出像素点的齐次坐标
+                reprojection_denom = reprojection_points_homo[:, 2:3]  # 重投影 W 坐标
+                reprojection_denom = np.where(
+                    np.abs(reprojection_denom) < 1e-12,
+                    np.sign(reprojection_denom) * 1e-12,
+                    reprojection_denom
+                )
+                reprojection_points_nonhomo = reprojection_points_homo[:, :2] / reprojection_denom
+                pixel_2d_homo_denom = pixel_2d_homo[:, 2:3]  # 实际观测到的像素点的 W 坐标
+                pixel_2d_homo_denom = np.where(
+                    np.abs(pixel_2d_homo_denom) < 1e-12,
+                    np.sign(pixel_2d_homo_denom) * 1e-12,
+                    pixel_2d_homo_denom
+                )
+                pixel_2d_nonhomo = pixel_2d_homo[:, :2] / pixel_2d_homo_denom
+                diff = (reprojection_points_nonhomo - pixel_2d_nonhomo).reshape(-1)
                 residuals.append(diff)
 
             return np.concatenate(residuals).astype(np.float64)
