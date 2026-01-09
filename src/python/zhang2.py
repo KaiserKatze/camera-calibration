@@ -868,7 +868,7 @@ class ZhangCameraCalibration:
 
         print(f'优化之前的重投影误差：\n\t{homography_reprojection_rmse(x0)}')
 
-        optimize_result = scipy.optimize.least_squares(
+        optimize_result: scipy.optimize.OptimizeResult = scipy.optimize.least_squares(
             residuals_joint,
             x0=x0,
             method='lm',  # Levenberg-Marquardt algorithm
@@ -880,7 +880,7 @@ class ZhangCameraCalibration:
         )
 
         # print(f'{optimize_result=}')
-        x_opt = optimize_result.x
+        x_opt: np.ndarray = optimize_result.x
         K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, n_views)
 
         print(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt)}')
