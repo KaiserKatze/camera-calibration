@@ -781,8 +781,8 @@ class ZhangCameraCalibration:
         if realK is not None:
             evaluate_relative_error(K, realK)
 
-        rvecs_init = []
-        tvecs_init = []
+        rvecs_init = []  # 旋转参数
+        tvecs_init = []  # 平移参数
         for H in list_of_homography:
             h1, h2, h3 = H.T
             Kinv = np.linalg.inv(K)
@@ -811,30 +811,36 @@ class ZhangCameraCalibration:
 
         # 用牛顿法
         def pack_params(K: np.ndarray, rvecs: list[np.ndarray], tvecs: list[np.ndarray]) -> np.ndarray:
-            parts = [K.reshape(-1)]
-            for rv, tv in zip(rvecs, tvecs):
-                parts.append(np.asarray(rv).reshape(-1))
-                parts.append(np.asarray(tv).reshape(-1))
-            return np.concatenate(parts).astype(np.float64)
+            """
+            将相机内参矩阵、旋转参数、平移参数全部打包为一个向量
+            """
+            parts = [
+                [K.reshape(-1)],
+                (rvec.reshape(-1) for rvec in rvecs),
+                (tvec.reshape(-1) for tvec in tvecs),
+            ]
+            return np.concatenate(list(itertools.chain.from_iterable(parts))).astype(np.float64)
 
         def unpack_params(x: np.ndarray, n_views: int):
-            K = x[:9].reshape((3,3))
-            rest = x[9:]
-            rvecs = []
-            tvecs = []
-            for i in range(n_views):
-                r = rest[i*6 : i*6 + 3]
-                t = rest[i*6 + 3 : i*6 + 6]
-                rvecs.append(r)
-                tvecs.append(t)
+            """
+            从打包好的向量中拆出相机内参矩阵、旋转参数、平移参数
+            """
+            K = x[:9].reshape((3,3))  # 首先提取 3 x 3 矩阵：相机内参矩阵
+            rest = x[9:]  # 剩余的参数
+            len_rest = rest.shape[0]
+            assert len_rest % 2 == 0, '剩余参数个数应该是偶数!'
+            assert len_rest == (len_rest_expected := 2 * n_views * 3), \
+                f'实际剩余参数个数 ({len_rest}) 与预期 ({len_rest_expected}) 不同!'
+            len_half_rest = len_rest // 2
+            rvecs = rest[:len_half_rest]
+            tvecs = rest[len_half_rest:]
+            rvecs = rvecs.reshape((n_views, 3))
+            tvecs = tvecs.reshape((n_views, 3))
             return K, rvecs, tvecs
 
+        n_views = len(list_of_pixel_2d_homo)  # 视图个数（即不同姿态的相机拍摄的“照片”的张数）
+
         def residuals_joint(x: np.ndarray) -> np.ndarray:
-            """
-            x: packed params
-            returns: concatenated residuals (2 * M * V)
-            """
-            n_views = len(list_of_pixel_2d_homo)
             K, rvecs, tvecs = unpack_params(x, n_views)
             K = K.astype(np.float64)
             residuals = []
@@ -878,7 +884,7 @@ class ZhangCameraCalibration:
 
         # print(f'{optimize_result=}')
         x_opt = optimize_result.x
-        K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, len(list_of_pixel_2d_homo))
+        K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, n_views)
 
         return K_opt
 
