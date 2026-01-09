@@ -391,11 +391,13 @@ class CameraModel:
     def __init__(self, d: float, a: float, b: float, theta: float, u0: float, v0: float):
         alpha = d / a
         beta = d / b
+        logger.warning('当前实现没有使用 `theta` 参数!')
         self.K = np.array([
-            [alpha, -alpha / np.tan(theta), u0],
+            # [alpha, -alpha / np.tan(theta), u0],
+            [alpha, 0, u0],
             [0, beta / np.sin(theta), v0],
             [0, 0, 1],
-        ])
+        ], dtype=np.float32)
         print('内参矩阵 K=\n', self.K)
         Kinv = np.linalg.inv(self.K)
         print('基本矩阵 B=\n', Kinv.T @ Kinv)
