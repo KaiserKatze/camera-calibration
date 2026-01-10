@@ -730,6 +730,7 @@ class ZhangCameraCalibration:
             logger.warning('矩阵V包含无穷大或NaN值!')
 
         logger.debug(f'矩阵 V 的形状为 {V.shape=}')
+        logger.debug(f'矩阵 V =\n{V}')
 
         # 计算矩阵 V 的条件数
         print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
