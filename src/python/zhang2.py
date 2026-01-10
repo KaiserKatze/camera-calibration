@@ -875,11 +875,12 @@ class ZhangCameraCalibration:
                 diff = (reprojection_points_nonhomo - pixel_2d_nonhomo).reshape(-1)
                 residuals.append(diff)
 
-            nonlocal n_iter
-            if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
-                path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
-                CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
-            n_iter += 1
+            ## KK-TEST
+            # nonlocal n_iter
+            # if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
+            #     path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
+            #     CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
+            # n_iter += 1
 
             return np.concatenate(residuals).astype(np.float64)
 
@@ -922,8 +923,9 @@ class ZhangCameraCalibration:
 
         logger.debug(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt)}')
 
-        for idx in range(len(list_of_pixel_2d_homo)):
-            CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K_opt, rvecs_opt, tvecs_opt, idx)
+        ## KK-TEST
+        # for idx in range(len(list_of_pixel_2d_homo)):
+        #     CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K_opt, rvecs_opt, tvecs_opt, idx)
 
         return K_opt # / K_opt[2, 2]
 
@@ -1269,8 +1271,9 @@ def run():
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
 
-    for idx in range(len(list_of_image_points)):
-        CameraModel.visualize_projection(model_points, list_of_image_points, idx)
+    ## KK-TEST
+    # for idx in range(len(list_of_image_points)):
+    #     CameraModel.visualize_projection(model_points, list_of_image_points, idx)
 
     realK = saved_data['real_intrinsic_matrix']
     logger.debug(f'可用校正图像数量: {len(list_of_image_points)}')
