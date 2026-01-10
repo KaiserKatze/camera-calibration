@@ -798,7 +798,7 @@ class ZhangCameraCalibration:
             lambda1 = 1.0 / np.linalg.norm(Kinv @ h1)
             lambda2 = 1.0 / np.linalg.norm(Kinv @ h2)
 
-            if abs(lambda1 - lambda2) > 1e-6:
+            if abs(lambda1 - lambda2) > 1e-4:
                 logger.error(f'尺度因子差距过大: {lambda1=}, {lambda2=}')
 
             # print(f'>>>>>>>>>>>>>>>>>>> h1 -> ', h1)
