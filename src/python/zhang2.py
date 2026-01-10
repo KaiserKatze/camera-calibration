@@ -560,7 +560,7 @@ class ZhangCameraCalibration:
         assert len(m) == 9  # 可以估计单应性的全部三个行向量
         estimated_homography = m.reshape((3,3))
 
-        logger.debug(f'估计的单应性 H=\n{estimated_homography}')
+        # logger.debug(f'估计的单应性 H=\n{estimated_homography}')
 
         # 检查估计的单应性是否包含无穷大或NaN值
         if np.any(np.isinf(estimated_homography)) or np.any(np.isnan(estimated_homography)):
@@ -817,12 +817,14 @@ class ZhangCameraCalibration:
             tvecs_init.append(t)
 
         # 用牛顿法
+
         def pack_params(K: np.ndarray, rvecs: list[np.ndarray], tvecs: list[np.ndarray]) -> np.ndarray:
             """
             将相机内参矩阵、旋转参数、平移参数全部打包为一个向量
             """
             parts = [
-                [K.reshape(-1)],
+                # 只优化相机内参矩阵的部分参数（共计 5 个参数）
+                [K[0], K[1, 1:]],
                 (rvec.reshape(-1) for rvec in rvecs),
                 (tvec.reshape(-1) for tvec in tvecs),
             ]
@@ -832,8 +834,14 @@ class ZhangCameraCalibration:
             """
             从打包好的向量中拆出相机内参矩阵、旋转参数、平移参数
             """
-            K = x[:9].reshape((3,3))  # 首先提取 3 x 3 矩阵：相机内参矩阵
-            rest = x[9:]  # 剩余的参数
+            n_params_in_K = 5
+            x_in_K = x[:n_params_in_K]  # 首先提取相机内部参数
+            K = np.array([  # 构造相机内参矩阵
+                [x_in_K[0], x_in_K[1], x_in_K[2]],
+                [0.0, x_in_K[3], x_in_K[4]],
+                [0.0, 0.0, 1.0],
+            ], dtype=np.float64)
+            rest = x[n_params_in_K:]  # 剩余的参数
             len_rest = rest.shape[0]
             assert len_rest % 2 == 0, '剩余参数个数应该是偶数!'
             assert len_rest == (len_rest_expected := 2 * n_views * 3), \
@@ -1241,7 +1249,7 @@ def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.n
         seq = model_points @ h_inv_r3.T
         seq = np.sign(seq)
         rate = abs(seq.sum()) / len(seq)
-        logger.debug(f'单应性拟仿射性 = {rate}')
+        # logger.debug(f'单应性拟仿射性 = {rate}')
         if rate > .95:
             kept_idx.append(idx)
     remain_ratio = len(kept_idx) / max(1, len(list_of_homography))
