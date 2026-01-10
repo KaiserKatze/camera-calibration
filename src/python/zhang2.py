@@ -479,8 +479,8 @@ class CameraModel:
         R = rodrigues(rv)  # 利用旋转参数 rv 构造旋转矩阵 R。
         H = CameraModel.make_homography(K, R, tv)  # 利用相机内参矩阵 K、旋转矩阵 R 和平移向量 tv 构造单应性 H。
         reprojection_points_homo = objpoints @ H.T  # 重投影，产出像素点的齐次坐标
-        print('rpipoints=\n', reprojection_points_homo)
-        print('imgpoints=\n', imgpoints[view_index])
+        # print('rpipoints=\n', reprojection_points_homo)
+        # print('imgpoints=\n', imgpoints[view_index])
         rpipoints = reprojection_points_homo[:, 0:2]
         imgpoints = imgpoints[view_index][:, 0:2]
         assert rpipoints.shape[0] == imgpoints.shape[0]
