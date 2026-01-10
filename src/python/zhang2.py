@@ -659,8 +659,9 @@ class ZhangCameraCalibration:
         assert len(list_of_homography) == len(list_of_pixel_2d_homo) > 1, '单应性列表长度应大于零!'
 
         def v_constraint(homography: np.ndarray, i: int, j: int):
-            def h(x: int, y: int):
-                return homography[x-1, y-1]
+            def h(col: int, row: int):
+                # 提取单应性的第 col 列向量的第 row 分量（即单应性的第 row 行第 col 列元素）
+                return homography[row-1, col-1]
 
             return np.array([
                 h(i, 1) * h(j, 1),
