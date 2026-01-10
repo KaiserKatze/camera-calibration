@@ -904,9 +904,9 @@ class ZhangCameraCalibration:
             # 边界条件只有在使用 trf 优化算法时才有效，但是 trf 算法太慢了，决定弃用它！
             # method='trf',   # <-- 改用 Trust Region Reflective 算法，支持边界约束
             # bounds=(lower_bounds, upper_bounds),
-            xtol=1e-8,
-            ftol=1e-8,
-            gtol=1e-8,
+            xtol=1e-4,
+            ftol=1e-4,
+            gtol=1e-4,
             max_nfev=5000,  # 最多迭代 5000 * n 次
             verbose=2,
         )
