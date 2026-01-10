@@ -729,8 +729,10 @@ class ZhangCameraCalibration:
         if np.any(np.isinf(V)) or np.any(np.isnan(V)):
             logger.warning('矩阵V包含无穷大或NaN值!')
 
+        logger.debug(f'矩阵 V 的形状为 {V.shape=}')
+
         # 计算矩阵 V 的条件数
-        # print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
+        print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
 
         logger.debug(f'矩阵 V 的秩为 rank(V)={np.linalg.matrix_rank(V)}')
 
