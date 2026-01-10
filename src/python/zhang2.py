@@ -1017,12 +1017,28 @@ def init():
     list_of_rotation = []
     list_of_translation = []
 
-    for _ in range(n_photos):
-        _, image_points, rotation, translation, _ = projection_model.randomly_project(model_points)
-        list_of_image_points.append(image_points)
-        list_of_rotation.append(rotation)
-        list_of_translation.append(translation)
+    # for _ in range(n_photos):
+    #     _, image_points, rotation, translation, _ = projection_model.randomly_project(model_points)
+    #     list_of_image_points.append(image_points)
+    #     list_of_rotation.append(rotation)
+    #     list_of_translation.append(translation)
 
+    for angle_x in range(-60, 61, 15):
+        print(f'Rotation({angle_x}, 0, 0)')
+        rotation = Rotation(angle_x, 0.0, 0.0).R
+        translation = Translation.randomize().T
+        _, image_points, _, _, _ = projection_model._arbitrary_project(model_points, rotation, translation, noise=None)
+        list_of_image_points.append(image_points)
+
+    for angle_y in itertools.chain.from_iterable([
+        range(-60, 0, 15),
+        range(15, 61, 15),
+    ]):
+        print(f'Rotation(0, {angle_y}, 0)')
+        rotation = Rotation(0.0, angle_y, 0.0).R
+        translation = Translation.randomize().T
+        _, image_points, _, _, _ = projection_model._arbitrary_project(model_points, rotation, translation, noise=None)
+        list_of_image_points.append(image_points)
 
     def infer_image_size(margin: int = 2, min_size: tuple[int, int] = (480, 640)):
         """
