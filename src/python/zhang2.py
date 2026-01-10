@@ -185,11 +185,14 @@ def normalize_points(points):
         [scale, 0, -scale * cx],
         [0, scale, -scale * cy],
         [0, 0, 1]
-    ])
+    ], dtype=np.float64)
 
     # 应用变换矩阵得到归一化后的点
     # 首先转换为齐次坐标 (N, 3)
-    points_homo = np.hstack((points, np.ones((points.shape[0], 1))))
+    points_homo = np.hstack(
+        (points, np.ones((points.shape[0], 1))),
+        dtype=np.float64,
+    )
     # 矩阵乘法: (T @ point.T).T
     normalized_points_homo = (T @ points_homo.T).T
 
@@ -235,7 +238,10 @@ def generate_model_points():
     # 转换为齐次坐标 `(x,y,1)`，第三个分量为 1
     num_points = points_2d.shape[0]
     ones = np.ones((num_points, 1))
-    points_2d_homo = np.hstack((points_2d, ones))
+    points_2d_homo = np.hstack(
+        (points_2d, ones),
+        dtype=np.float64,
+    )
     assert points_2d_homo.shape[1] == 3
     return points_2d_homo
 
@@ -327,7 +333,7 @@ class Rotation:
 
 class Translation:
     def __init__(self, Tx: float, Ty: float, Tz: float):
-        self.T = np.array([[Tx], [Ty], [Tz]])
+        self.T = np.array([[Tx], [Ty], [Tz]], dtype=np.float64)
         self.Tx = Tx
         self.Ty = Ty
         self.Tz = Tz
@@ -354,7 +360,7 @@ class CameraModel:
             # [0, beta / np.sin(theta), v0],
             [0, beta, v0],
             [0, 0, 1],
-        ], dtype=np.float32)
+        ], dtype=np.float64)
 
     @staticmethod
     def make_homography(intrinsic_matrix: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
@@ -371,7 +377,10 @@ class CameraModel:
         :return: 单应性
         :rtype: ndarray[_AnyShape, dtype[Any]]
         """
-        return intrinsic_matrix @ np.hstack((rotation[:, :2], translation))
+        return intrinsic_matrix @ np.hstack(
+            (rotation[:, :2], translation),
+            dtype=np.float64,
+        )
 
     def _arbitrary_project(self, model_2d_homo: np.ndarray,
                            rotation: np.ndarray,
@@ -420,7 +429,10 @@ class CameraModel:
             noise = np.random.normal(0, 0.5, pixel_2d_nonhomo.shape)
             pixel_2d_nonhomo += noise
             # 重新组装像素点的齐次坐标
-            pixel_2d_homo = np.hstack((pixel_2d_nonhomo * pixel_w, pixel_w))
+            pixel_2d_homo = np.hstack(
+                (pixel_2d_nonhomo * pixel_w, pixel_w),
+                dtype=np.float64,
+            )
 
         assert pixel_2d_homo.shape == model_2d_homo.shape
         return model_2d_homo, pixel_2d_homo, rotation, translation, H
@@ -543,13 +555,22 @@ class ZhangCameraCalibration:
         # logger.debug(f'u=\n{u[:5]}')
         # logger.debug(f'v=\n{v[:5]}')
         # logger.debug(f'model=\n{model[:5]}')
-        row1 = np.hstack([model, zeros, -u * model])
+        row1 = np.hstack(
+            [model, zeros, -u * model],
+            dtype=np.float64,
+        )
         assert row1.shape == (model_h, 9)
         # logger.debug(f'row1=\n{row1[:5]}')
-        row2 = np.hstack([zeros, model, -v * model])
+        row2 = np.hstack(
+            [zeros, model, -v * model],
+            dtype=np.float64,
+        )
         assert row2.shape == (model_h, 9)
         # logger.debug(f'row2=\n{row2[:5]}')
-        L = np.vstack([row1, row2])
+        L = np.vstack(
+            [row1, row2],
+            dtype=np.float64,
+        )
         # logger.debug(f'用来求解单应性的系数矩阵 L=\n{L}')
         assert L.shape == (2 * model_h, 9)
 
@@ -588,8 +609,14 @@ class ZhangCameraCalibration:
         model_nonhomo_norm = (model_nonhomo - mean_model) / std_model
         pixel_nonhomo_norm = (pixel_nonhomo - mean_pixel) / std_pixel
         # 构建齐次坐标 (Homogeneous Coordinates)
-        model_norm = np.hstack([model_nonhomo_norm, model[:, 2:3]])
-        pixel_norm = np.hstack([pixel_nonhomo_norm, pixel[:, 2:3]])
+        model_norm = np.hstack(
+            [model_nonhomo_norm, model[:, 2:3]],
+            dtype=np.float64,
+        )
+        pixel_norm = np.hstack(
+            [pixel_nonhomo_norm, pixel[:, 2:3]],
+            dtype=np.float64,
+        )
         # 利用 svd 估计单应性
         homography = cls.infer_homography_without_radial_distortion(model_norm, pixel_norm)
         # 将 homography 的最后一个元素归一化为 1
@@ -605,8 +632,14 @@ class ZhangCameraCalibration:
         model_nonhomo_norm, T_model = normalize_points(model_nonhomo)
         pixel_nonhomo_norm, T_pixel = normalize_points(pixel_nonhomo)
         # 构建齐次坐标 (Homogeneous Coordinates)
-        model_norm = np.hstack([model_nonhomo_norm, model[:, 2:3]])
-        pixel_norm = np.hstack([pixel_nonhomo_norm, pixel[:, 2:3]])
+        model_norm = np.hstack(
+            [model_nonhomo_norm, model[:, 2:3]],
+            dtype=np.float64,
+        )
+        pixel_norm = np.hstack(
+            [pixel_nonhomo_norm, pixel[:, 2:3]],
+            dtype=np.float64,
+        )
         # 利用 svd 估计单应性
         homography_norm = cls.infer_homography_without_radial_distortion(model_norm, pixel_norm)
         # 去归一化 (Denormalization)
@@ -822,7 +855,10 @@ class ZhangCameraCalibration:
                 (rvec.reshape(-1) for rvec in rvecs),
                 (tvec.reshape(-1) for tvec in tvecs),
             ]
-            return np.concatenate(list(itertools.chain.from_iterable(parts))).astype(np.float64)
+            return np.concatenate(
+                list(itertools.chain.from_iterable(parts)),
+                dtype=np.float64,
+            )
 
         def unpack_params(x: np.ndarray, n_views: int):
             """
@@ -877,7 +913,7 @@ class ZhangCameraCalibration:
             #     CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
             # n_iter += 1
 
-            return np.concatenate(residuals).astype(np.float64)
+            return np.concatenate(residuals, dtype=np.float64)
 
         def homography_reprojection_rmse(x: np.ndarray) -> float:
             err_vec = residuals_joint(x).reshape((-1, 2))
@@ -1218,7 +1254,7 @@ def compare_with_opencv():
     }
 
 
-def min_max(iterable, dtype=np.float32):
+def min_max(iterable, dtype=np.float64):
     min_val = dtype('inf')
     max_val = dtype('-inf')
     # 在迭代过程中直接更新
