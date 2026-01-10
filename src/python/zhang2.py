@@ -950,76 +950,6 @@ def load_mat(path: str) -> typing.Dict[str, np.ndarray]:
     return scipy.io.loadmat(path)
 
 
-def infer_image_size(list_of_image_points, margin=2, min_size=(480, 640)):
-    """
-    输入:
-      list_of_image_points: 可以是
-         - numpy.ndarray with shape (V, M, 3)  (your zhang.mat: 1000x256x3)
-         - list of arrays each shape (M, 3)
-         - single array shape (M,3)
-      margin: 整数，结果上再加的像素余量
-      min_size: (min_height, min_width) 最小尺寸下限
-    返回:
-      (height, width) 两个整数
-    """
-    pts = list_of_image_points
-
-    # 转为 numpy 数组（若是 list，尝试 stack）
-    if isinstance(pts, list):
-        pts = np.stack([np.asarray(p) for p in pts], axis=0)   # -> (V, M, 3)
-    else:
-        pts = np.asarray(pts)
-
-    # 可能的形状：
-    # (V, M, 3)  <-- 1000 x 256 x 3
-    # (M, 3, V)  etc. 处理常见变体
-    if pts.ndim == 3 and pts.shape[2] == 3:
-        arr = pts  # (V, M, 3)
-    elif pts.ndim == 3 and pts.shape[1] == 3:
-        # 例如 (V, 3, M) or (something,3,M) -> 转置为 (V, M, 3)
-        arr = pts.transpose(0, 2, 1)
-    elif pts.ndim == 2 and pts.shape[1] == 3:
-        # 单幅图像 (M,3) -> 加一个视图维度
-        arr = pts[np.newaxis, ...]
-    else:
-        raise ValueError(f'unrecognized shape for list_of_image_points: {pts.shape}')
-
-    # # 检查数据是否包含无穷大或NaN值
-    # if np.any(np.isinf(arr)) or np.any(np.isnan(arr)):
-    #     logger.warning('输入图像点包含无穷大或NaN值，将使用默认尺寸')
-    #     return min_size[0], min_size[1]
-
-    # 把齐次坐标除以第三个分量得到非齐次 u,v
-    # 防止除以0 (理论上第三分量都是1)，用 eps 保护
-    denom = arr[..., 2:3]
-    # 使用更安全的除法，防止除以接近0的值
-    denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
-    uv = arr[..., :2] / denom   # shape (V, M, 2)
-
-    # 检查uv中是否包含无穷大或NaN值
-    if np.any(np.isinf(uv)) or np.any(np.isnan(uv)):
-        logger.warning('计算得到的uv坐标包含无穷大或NaN值，将使用默认尺寸')
-        return min_size[0], min_size[1]
-
-    # 取所有视图与所有点的最大 u (x) 和 v (y)
-    max_u = np.nanmax(uv[..., 0])
-    max_v = np.nanmax(uv[..., 1])
-
-    # 检查最大值是否为无穷大
-    if np.isinf(max_u) or np.isinf(max_v):
-        logger.warning('最大坐标值为无穷大，将使用默认尺寸')
-        return min_size[0], min_size[1]
-
-    width  = int(np.ceil(max_u)) + int(margin)
-    height = int(np.ceil(max_v)) + int(margin)
-
-    # 应用最小尺寸下限
-    height = max(height, int(min_size[0]))
-    width  = max(width,  int(min_size[1]))
-
-    return (height, width)
-
-
 def init():
     camera_theta = np.radians(90)
     # projection_model = CameraModel(
@@ -1050,6 +980,76 @@ def init():
         list_of_image_points.append(image_points)
         list_of_rotation.append(rotation)
         list_of_translation.append(translation)
+
+
+    def infer_image_size(margin=2, min_size=(480, 640)):
+        """
+        输入:
+        list_of_image_points: 可以是
+            - numpy.ndarray with shape (V, M, 3)  (your zhang.mat: 1000x256x3)
+            - list of arrays each shape (M, 3)
+            - single array shape (M,3)
+        margin: 整数，结果上再加的像素余量
+        min_size: (min_height, min_width) 最小尺寸下限
+        返回:
+        (height, width) 两个整数
+        """
+        pts = list_of_image_points
+
+        # 转为 numpy 数组（若是 list，尝试 stack）
+        if isinstance(pts, list):
+            pts = np.stack([np.asarray(p) for p in pts], axis=0)   # -> (V, M, 3)
+        else:
+            pts = np.asarray(pts)
+
+        # 可能的形状：
+        # (V, M, 3)  <-- 1000 x 256 x 3
+        # (M, 3, V)  etc. 处理常见变体
+        if pts.ndim == 3 and pts.shape[2] == 3:
+            arr = pts  # (V, M, 3)
+        elif pts.ndim == 3 and pts.shape[1] == 3:
+            # 例如 (V, 3, M) or (something,3,M) -> 转置为 (V, M, 3)
+            arr = pts.transpose(0, 2, 1)
+        elif pts.ndim == 2 and pts.shape[1] == 3:
+            # 单幅图像 (M,3) -> 加一个视图维度
+            arr = pts[np.newaxis, ...]
+        else:
+            raise ValueError(f'unrecognized shape for list_of_image_points: {pts.shape}')
+
+        # # 检查数据是否包含无穷大或NaN值
+        # if np.any(np.isinf(arr)) or np.any(np.isnan(arr)):
+        #     logger.warning('输入图像点包含无穷大或NaN值，将使用默认尺寸')
+        #     return min_size[0], min_size[1]
+
+        # 把齐次坐标除以第三个分量得到非齐次 u,v
+        # 防止除以0 (理论上第三分量都是1)，用 eps 保护
+        denom = arr[..., 2:3]
+        # 使用更安全的除法，防止除以接近0的值
+        denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
+        uv = arr[..., :2] / denom   # shape (V, M, 2)
+
+        # 检查uv中是否包含无穷大或NaN值
+        if np.any(np.isinf(uv)) or np.any(np.isnan(uv)):
+            logger.warning('计算得到的uv坐标包含无穷大或NaN值，将使用默认尺寸')
+            return min_size[0], min_size[1]
+
+        # 取所有视图与所有点的最大 u (x) 和 v (y)
+        max_u = np.nanmax(uv[..., 0])
+        max_v = np.nanmax(uv[..., 1])
+
+        # 检查最大值是否为无穷大
+        if np.isinf(max_u) or np.isinf(max_v):
+            logger.warning('最大坐标值为无穷大，将使用默认尺寸')
+            return min_size[0], min_size[1]
+
+        width  = int(np.ceil(max_u)) + int(margin)
+        height = int(np.ceil(max_v)) + int(margin)
+
+        # 应用最小尺寸下限
+        height = max(height, int(min_size[0]))
+        width  = max(width,  int(min_size[1]))
+
+        return (height, width)
 
     image_size = infer_image_size(list_of_image_points)
 
