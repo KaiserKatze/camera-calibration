@@ -435,7 +435,8 @@ class CameraModel:
         return self._arbitrary_project(model_2d_homo, rotation, translation, noise=None)
 
     @staticmethod
-    def visualize_projection(objpoints: np.ndarray, imgpoints: list[np.ndarray], view_index: int = 0):
+    def visualize_projection(objpoints: np.ndarray, imgpoints: list[np.ndarray],
+                             view_index: int = 0, path_fig: str = None):
         """
         可视化第 view_index 个视图的模型点与投影点
         """
@@ -460,7 +461,8 @@ class CameraModel:
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
         plt.tight_layout()
         plt.title(f"第 {view_index} 个机位下 模型点-像素点 映射关系")
-        path_fig = f'fig-{view_index}-projection.png'
+        if path_fig is None:
+            path_fig = f'fig-{view_index}-projection.png'
         print('saving figure to:', os.path.abspath(path_fig))
         # plt.show()
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
@@ -469,7 +471,7 @@ class CameraModel:
     def visualize_reprojection(objpoints: np.ndarray, imgpoints: list[np.ndarray],
                                estimated_intrinsic_matrix: np.ndarray,
                                rvecs: list[np.ndarray], tvecs: list[np.ndarray],
-                               view_index: int = 0):
+                               view_index: int = 0, path_fig: str = None):
         K = estimated_intrinsic_matrix
         rv = rvecs[view_index]
         tv = tvecs[view_index]
@@ -496,7 +498,8 @@ class CameraModel:
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
         plt.tight_layout()
         plt.title(f"第 {view_index} 个机位下 重投影 映射关系")
-        path_fig = f'fig-{view_index}-reprojection.png'
+        if path_fig is None:
+            path_fig = f'fig-{view_index}-reprojection.png'
         print('saving figure to:', os.path.abspath(path_fig))
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
 
