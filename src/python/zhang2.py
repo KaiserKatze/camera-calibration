@@ -963,12 +963,12 @@ def init():
     #     v0=240,
     # )
     projection_model = CameraModel(
-        d=100,
-        a=100,
-        b=100,
+        d=22500.0,
+        a=18,
+        b=25,
         theta=camera_theta,  # 将角度制的 90.5° 转为弧度制
-        u0=0,
-        v0=0,
+        u0=255,
+        v0=255,
     )
     model_points = generate_model_points()
     n_photos = 20
