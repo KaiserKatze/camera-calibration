@@ -464,8 +464,8 @@ class CameraModel:
         if path_fig is None:
             path_fig = f'fig-{view_index}-projection.png'
         print('saving figure to:', os.path.abspath(path_fig))
-        # plt.show()
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
+        plt.close()
 
     @staticmethod
     def visualize_reprojection(objpoints: np.ndarray, imgpoints: list[np.ndarray],
@@ -502,6 +502,7 @@ class CameraModel:
             path_fig = f'fig-{view_index}-reprojection.png'
         print('saving figure to:', os.path.abspath(path_fig))
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
+        plt.close()
 
 
 class ZhangCameraCalibration:
@@ -876,10 +877,6 @@ class ZhangCameraCalibration:
             return np.concatenate(residuals).astype(np.float64)
 
         def homography_reprojection_rmse(x: np.ndarray) -> float:
-            #     err = imgp - projected
-            #     total_error += np.sum(np.linalg.norm(err, axis=1) ** 2)
-            #     total_points += objp.shape[0]
-            # rmse = np.sqrt(total_error / total_points)
             err_vec = residuals_joint(x).reshape((-1, 2))
             err_norm2 = np.linalg.norm(err_vec, axis=1) ** 2
             err_mean = np.mean(err_norm2)
