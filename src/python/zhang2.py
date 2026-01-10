@@ -325,9 +325,10 @@ class Rotation:
 
     @classmethod
     def randomize(cls):
-        Rx = np.random.uniform(-5, 5)
-        Ry = np.random.uniform(-5, 5)
-        Rz = np.random.uniform(-5, 5)
+        max_angle = 30
+        Rx = np.random.uniform(-max_angle, max_angle)
+        Ry = np.random.uniform(-max_angle, max_angle)
+        Rz = np.random.uniform(-max_angle, max_angle)
         return cls(Rx, Ry, Rz)
 
 
@@ -343,9 +344,11 @@ class Translation:
 
     @classmethod
     def randomize(cls):
-        Tx = np.random.uniform(-5, 5)
-        Ty = np.random.uniform(-5, 5)
-        Tz = np.random.uniform(10, 20)
+        Tz = np.random.uniform(200, 400)
+        # 根据相似三角形，调整XY位移，保证物体大概率在视野内
+        range_xy = Tz * 0.2
+        Tx = np.random.uniform(-range_xy, range_xy)
+        Ty = np.random.uniform(-range_xy, range_xy)
         return cls(Tx, Ty, Tz)
 
 
