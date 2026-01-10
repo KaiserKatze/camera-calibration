@@ -273,8 +273,8 @@ def homo2nonhomo(points: np.ndarray) -> np.ndarray:
     """
     assert points.ndim == 2 and points.shape[-1] == 3, f'{points.ndim=}, {points.shape=}'
     denom = points[:, 2:3]  # 齐次分量
-    # 防止除以接近0的值，使用一个极小值
-    denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)  # 避免除零错误
+    # 防止除以接近0的值，使用一个很小的数
+    denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
     points = points[:, :2] / denom
     return points
 
@@ -1074,10 +1074,19 @@ def evaluate_relative_error(estimated_intrinsic_matrix, real_intrinsic_matrix):
     tiny = np.finfo(real_intrinsic_matrix.dtype).tiny
     relative_error_norm = np.linalg.norm(estimated_intrinsic_matrix - real_intrinsic_matrix) / (np.linalg.norm(real_intrinsic_matrix) + tiny)
     logger.info(f'相机内参矩阵相对误差(L2范数) = {relative_error_norm*100:.2f}%')
-    relative_error_elementwise = (estimated_intrinsic_matrix - real_intrinsic_matrix) / (real_intrinsic_matrix + tiny)
+    sign = np.sign(real_intrinsic_matrix)
+    signed_tiny = np.where(sign == 0.0, tiny, tiny * sign)
+    relative_error_elementwise = (estimated_intrinsic_matrix - real_intrinsic_matrix) / (real_intrinsic_matrix + signed_tiny)
     relative_error_elementwise[relative_error_elementwise > 1e10] = np.inf
     relative_error_elementwise[relative_error_elementwise < -1e10] = -np.inf
-    logger.debug(f'相机内参矩阵相对误差(逐个元素) =\n{str(np.vectorize(lambda x: f'{x*100:.2f}%')(relative_error_elementwise))}')
+    formatted_array = np.array2string(
+        relative_error_elementwise * 100,
+        formatter={'float_kind': lambda x: f'{x:.2f}%'},
+        precision=2,
+        suppress_small=True,
+        separator=', '
+    )
+    logger.debug(f'相机内参矩阵相对误差(逐个元素) =\n{formatted_array}')
 
 
 def compare_with_opencv():
