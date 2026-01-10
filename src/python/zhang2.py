@@ -1131,7 +1131,7 @@ def evaluate_relative_error(estimated_intrinsic_matrix, real_intrinsic_matrix):
 
 
 def compare_with_opencv():
-    logger.debug('\n' * 10 + '=' * 100)
+    logger.debug('\n' * 2 + '=' * 100)
     import cv2
     saved_data = load_mat('zhang.mat')
     model_points_h = saved_data['model_2d_homo']             # (M,3) 齐次模型点
@@ -1341,7 +1341,7 @@ def run():
 if __name__ == '__main__':
     init()  # 生成模型点和像素点
 
-    logger.debug('\n' * 10 + '=' * 100)
+    logger.debug('\n' * 2 + '=' * 100)
     saved_data = load_mat('zhang.mat')
     image_size = saved_data['image_size']
     logger.debug(f'图像尺寸 ={image_size}')
@@ -1373,7 +1373,7 @@ if __name__ == '__main__':
 
     delete_all_pngs()
 
-    logger.debug('\n' * 10 + '=' * 100)
+    logger.debug('\n' * 2 + '=' * 100)
 
     run()
 
