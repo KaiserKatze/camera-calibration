@@ -488,8 +488,8 @@ class CameraModel:
         assert rpipoints.shape[0] == imgpoints.shape[0]
 
         plt.figure()
-        plt.scatter(imgpoints[:, 0], imgpoints[:, 1], c='r', marker='o', label='观测的像素点')
-        plt.scatter(rpipoints[:, 0], rpipoints[:, 1], c='b', marker='x', label='重投影像素点')
+        plt.scatter(imgpoints[:, 0], imgpoints[:, 1], c='b', marker='x', label='观测的像素点')
+        plt.scatter(rpipoints[:, 0], rpipoints[:, 1], c='r', marker='o', label='重投影像素点')
         for i in range(imgpoints.shape[0]):
             plt.plot(
                 [imgpoints[i, 0], rpipoints[i, 0]],
@@ -1290,6 +1290,7 @@ def run():
 if __name__ == '__main__':
     init()  # 生成模型点和像素点
 
+    logger.debug('\n' * 10 + '=' * 100)
     saved_data = load_mat('zhang.mat')
     image_size = saved_data['image_size']
     logger.debug(f'图像尺寸 ={image_size}')
@@ -1298,7 +1299,31 @@ if __name__ == '__main__':
     logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
     logger.debug(f'真实的基本矩阵 B=\n{realKinv.T @ realKinv}')
 
+    def delete_all_pngs():
+        # 获取当前目录对象
+        current_dir = pathlib.Path('.')
+
+        # 查找所有 .png 文件 (不区分大小写通常取决于操作系统，Linux下区分)
+        # 如果想同时匹配 .PNG 和 .png，可以使用 glob('*.[pP][nN][gG]')
+        png_files = list(current_dir.glob('*.png'))
+
+        if not png_files:
+            print("当前目录下没有找到 PNG 文件。")
+            return
+
+        print(f"正在删除 {len(png_files)} 个文件...")
+
+        for file_path in png_files:
+            try:
+                file_path.unlink()  # 执行删除
+                print(f"已删除: {file_path.name}")
+            except Exception as e:
+                print(f"删除失败 {file_path.name}: {e}")
+
+    delete_all_pngs()
+
     logger.debug('\n' * 10 + '=' * 100)
+
     run()
 
     # 使用 opencv 现有的算法，求解相机内参矩阵
