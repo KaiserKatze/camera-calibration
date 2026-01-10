@@ -876,8 +876,8 @@ class ZhangCameraCalibration:
                 residuals.append(diff)
 
             nonlocal n_iter
-            if n_iter % 100 == 0:  # 每 100 次迭代，绘图一次
-                path_fig = f'fig-0-optimizition (iter {n_iter:04d}).png'
+            if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
+                path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
                 CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
             n_iter += 1
 
