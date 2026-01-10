@@ -444,8 +444,8 @@ class CameraModel:
         """
         # print('objpoints=\n', objpoints)
         # print('imgpoints=\n', imgpoints[view_index])
-        objpoints = objpoints[:, 0:2]
-        imgpoints = imgpoints[view_index, :, 0:2]
+        objpoints = homo2nonhomo(objpoints)
+        imgpoints = homo2nonhomo(imgpoints[view_index])
         obj_obs = objpoints.reshape(-1, 2)
         img_obs = imgpoints.reshape(-1, 2)
         assert img_obs.shape[0] == obj_obs.shape[0]
@@ -483,8 +483,8 @@ class CameraModel:
         reprojection_points_homo = objpoints @ H.T  # 重投影，产出像素点的齐次坐标
         # print('rpipoints=\n', reprojection_points_homo)
         # print('imgpoints=\n', imgpoints[view_index])
-        rpipoints = reprojection_points_homo[:, 0:2] / reprojection_points_homo[:, 2:3]
-        imgpoints = imgpoints[view_index][:, 0:2] / imgpoints[view_index][:, 2:3]
+        rpipoints = homo2nonhomo(reprojection_points_homo)
+        imgpoints = homo2nonhomo(imgpoints[view_index])
         assert rpipoints.shape[0] == imgpoints.shape[0]
 
         plt.figure()
