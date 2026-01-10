@@ -724,8 +724,6 @@ class ZhangCameraCalibration:
         if np.any(np.isinf(BB)) or np.any(np.isnan(BB)):
             raise ValueError('B矩阵包含无效值，使用默认内参矩阵')
 
-        B11, B12, B22, B13, B23, B33 = b / np.sign(b[0])
-
         BB = np.array([
             [B11, B12, B13],
             [B12, B22, B23],
@@ -895,20 +893,21 @@ class ZhangCameraCalibration:
 
         logger.debug(f'优化之前的重投影误差：\n\t{homography_reprojection_rmse(x0)}')
 
-        n_params = len(x0)  # 需要调优的参数个数
-        lower_bounds = -np.inf * np.ones(n_params)
-        upper_bounds = np.inf * np.ones(n_params)
-        # 强制 alpha > 0 (给一个极小正数防止除0)
-        lower_bounds[0] = 1e-9
-        # 强制 beta > 0 (注意 pack_params 中: K[0]有3个元素，K[1,1:]有2个元素，beta是第4个元素，索引为3)
-        lower_bounds[3] = 1e-9
+        # n_params = len(x0)  # 需要调优的参数个数
+        # lower_bounds = -np.inf * np.ones(n_params)
+        # upper_bounds = np.inf * np.ones(n_params)
+        # # 强制 alpha > 0 (给一个极小正数防止除0)
+        # lower_bounds[0] = 1e-9
+        # # 强制 beta > 0 (注意 pack_params 中: K[0]有3个元素，K[1,1:]有2个元素，beta是第4个元素，索引为3)
+        # lower_bounds[3] = 1e-9
 
         optimize_result: scipy.optimize.OptimizeResult = scipy.optimize.least_squares(
             residuals_joint,
             x0=x0,
-            # method='lm',  # <-- Levenberg-Marquardt algorithm 不支持 bounds，必须注释掉
-            method='trf',   # <-- 改用 Trust Region Reflective 算法，支持边界约束
-            bounds=(lower_bounds, upper_bounds), # <-- 传入边界
+            method='lm',  # Levenberg-Marquardt algorithm
+            # 边界条件只有在使用 trf 优化算法时才有效，但是 trf 算法太慢了，决定弃用它！
+            # method='trf',   # <-- 改用 Trust Region Reflective 算法，支持边界约束
+            # bounds=(lower_bounds, upper_bounds),
             xtol=1e-8,
             ftol=1e-8,
             gtol=1e-8,
