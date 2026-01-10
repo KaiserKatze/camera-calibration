@@ -1291,6 +1291,8 @@ if __name__ == '__main__':
     # init()  # 生成模型点和像素点
 
     saved_data = load_mat('zhang.mat')
+    image_size = saved_data['image_size']
+    logger.debug(f'图像尺寸 ={image_size}')
     realK = saved_data['real_intrinsic_matrix']
     realKinv = np.linalg.inv(realK)
     logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
