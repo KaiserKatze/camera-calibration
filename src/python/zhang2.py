@@ -465,7 +465,7 @@ class CameraModel:
         plt.title(f"第 {view_index} 个机位下 模型点-像素点 映射关系")
         if path_fig is None:
             path_fig = f'fig-{view_index}-projection.png'
-        print('saving figure to:', os.path.abspath(path_fig))
+        logger.debug(f'saving figure to: {os.path.abspath(path_fig)!r}')
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
         plt.close()
 
@@ -502,7 +502,7 @@ class CameraModel:
         plt.title(f"第 {view_index} 个机位下 重投影 映射关系")
         if path_fig is None:
             path_fig = f'fig-{view_index}-reprojection.png'
-        print('saving figure to:', os.path.abspath(path_fig))
+        logger.debug(f'saving figure to: {os.path.abspath(path_fig)!r}')
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
         plt.close()
 
