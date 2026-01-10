@@ -697,6 +697,7 @@ class ZhangCameraCalibration:
         # print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
 
         _, S, Vh = svd(V)
+
         abs_singular_value = abs(S)
         min_abs_singular_value = abs_singular_value.min()
         max_abs_singular_value = abs_singular_value.max()
@@ -718,18 +719,12 @@ class ZhangCameraCalibration:
             [B12, B22, B23],
             [B13, B23, B33],
         ], dtype=np.float64)
-        logger.debug(f'估计的基本矩阵(未修改符号) B=\n{BB}')
+        logger.debug(f'估计的基本矩阵 B=\n{BB}')
 
         # 检查B矩阵元素是否有效
         if np.any(np.isinf(BB)) or np.any(np.isnan(BB)):
             raise ValueError('B矩阵包含无效值，使用默认内参矩阵')
 
-        BB = np.array([
-            [B11, B12, B13],
-            [B12, B22, B23],
-            [B13, B23, B33],
-        ])
-        logger.debug(f'估计的基本矩阵(已修改符号) B=\n{BB}')
         principal_minors = [np.linalg.det(BB[:i, :i]) for i in range(1,4)]
         principal_minors_str = ', '.join(['{:.6e}'.format(x) for x in principal_minors])
         logger.debug(f'估计的基本矩阵的顺序主子式 =\n{principal_minors_str}')
