@@ -976,7 +976,7 @@ def init():
         list_of_translation.append(translation)
 
 
-    def infer_image_size(margin=2, min_size=(480, 640)):
+    def infer_image_size(margin: int = 2, min_size: tuple[int, int] = (480, 640)):
         """
         输入:
         list_of_image_points: 可以是
@@ -1045,7 +1045,7 @@ def init():
 
         return (height, width)
 
-    image_size = infer_image_size(list_of_image_points)
+    image_size = infer_image_size()
 
     save_mat(
         'zhang.mat',
