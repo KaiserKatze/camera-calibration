@@ -720,7 +720,7 @@ class ZhangCameraCalibration:
             [B12, B22, B23],
             [B13, B23, B33],
         ], dtype=np.float64)
-        logger.debug('估计的基本矩阵(未修改符号) B=\n{BB}')
+        logger.debug(f'估计的基本矩阵(未修改符号) B=\n{BB}')
 
         # 检查B矩阵元素是否有效
         if np.any(np.isinf(BB)) or np.any(np.isnan(BB)):
