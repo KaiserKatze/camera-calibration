@@ -201,23 +201,24 @@ def normalize_points(points):
 def generate_model_points():
     """
     生成模型平面。
-    一共生成 N = m * n * 4 个点。
+    一共生成 N = ni * nj 个点。
 
     Returns:
         points_2d_homo: 模型点齐次坐标，形状为 (N, 3)。
     """
 
-    n = 3  # 网格列数
-    a = 25  # 每个黑色正方形的边长（像素）
+    ni = 10  # 网格列数
+    nj = 14  # 网格行数
+    a = 10  # 每个黑色正方形的边长（像素）
 
     points_2d = []
-    for i in range(n):
-        for j in range(n):
+    for i in range(ni):
+        for j in range(nj):
             # 计算当前正方形的左上角坐标
             points_2d.append(
                 (i * a, j * a)
             )
-    assert len(points_2d) == n * n
+    assert len(points_2d) == ni * nj
     points_2d = np.array(points_2d, dtype=np.float64)
 
     # 居中
