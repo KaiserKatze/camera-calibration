@@ -701,17 +701,15 @@ class ZhangCameraCalibration:
         min_abs_singular_value = abs_singular_value.min()
         max_abs_singular_value = abs_singular_value.max()
 
+        logger.debug(f'矩阵 V 的奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
+                        + f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
+                        + f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
+                        + f'\t矩阵 V 的谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :2f}')
+
         if min_abs_singular_value < 1e-12:
             logger.warning('矩阵V的最小奇异值接近0，可能导致数值不稳定')
-            # 使用正则化方法求解
-            b = Vh[-1, :]
-        else:
-            logger.debug(f'矩阵 V 的奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
-                         + f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
-                         + f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
-                         + f'\t矩阵 V 的谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :2f}')
 
-            b = Vh[-1, :]
+        b = Vh[-1, :]
 
         assert b.shape == (6,), f'向量 b 的形状实际上是: {b.shape}'
         B11, B12, B22, B13, B23, B33 = b
