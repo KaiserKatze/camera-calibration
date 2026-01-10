@@ -1049,7 +1049,7 @@ def init():
 
 def show_real_homography(list_of_rotation, list_of_translation, real_K):
     real_homography = [
-        real_K @ np.column_stack([rotation[:, 0], rotation[:, 1], translation])
+        CameraModel.make_homography(real_K, rotation, translation)
         for rotation, translation in zip(list_of_rotation, list_of_translation)
     ]
     for homography in real_homography:
