@@ -1361,22 +1361,18 @@ if __name__ == '__main__':
         # 获取当前目录对象
         current_dir = pathlib.Path('.')
 
-        # 查找所有 .png 文件 (不区分大小写通常取决于操作系统，Linux下区分)
-        # 如果想同时匹配 .PNG 和 .png，可以使用 glob('*.[pP][nN][gG]')
-        png_files = list(current_dir.glob('*.png'))
+        # 查找所有 .png 文件 (不区分大小写)
+        png_files = list(current_dir.glob('*.[pP][nN][gG]'))
 
         if not png_files:
-            print("当前目录下没有找到 PNG 文件。")
+            logger.debug('当前目录下没有找到 PNG 文件。')
             return
-
-        print(f"正在删除 {len(png_files)} 个文件...")
 
         for file_path in png_files:
             try:
                 file_path.unlink()  # 执行删除
-                print(f"已删除: {file_path.name}")
             except Exception as e:
-                print(f"删除失败 {file_path.name}: {e}")
+                logger.debug(f'删除失败 {file_path.name}: {e}')
 
     delete_all_pngs()
 
