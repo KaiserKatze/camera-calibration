@@ -903,7 +903,7 @@ class ZhangCameraCalibration:
             xtol=1e-8,
             ftol=1e-8,
             gtol=1e-8,
-            max_nfev=20,  # 最多迭代 20 * n 次
+            max_nfev=5000,  # 最多迭代 5000 * n 次
             verbose=2,
         )
 
