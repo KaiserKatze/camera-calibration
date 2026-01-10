@@ -719,7 +719,7 @@ class ZhangCameraCalibration:
             [B12, B22, B23],
             [B13, B23, B33],
         ], dtype=np.float64)
-        print('估计的基本矩阵(未修改符号) B=\n', BB)
+        logger.debug('估计的基本矩阵(未修改符号) B=\n{BB}')
 
         # 检查B矩阵元素是否有效
         if np.any(np.isinf(BB)) or np.any(np.isnan(BB)):
@@ -880,7 +880,7 @@ class ZhangCameraCalibration:
 
             nonlocal n_iter
             if n_iter % 100 == 0:  # 每 100 次迭代，绘图一次
-                path_fig = f'fig-0-reprojection (iter {n_iter:04d}).png'
+                path_fig = f'fig-0-optimizition (iter {n_iter:04d}).png'
                 CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
             n_iter += 1
 
@@ -894,7 +894,7 @@ class ZhangCameraCalibration:
 
         x0 = pack_params(K, rvecs_init, tvecs_init)
 
-        print(f'优化之前的重投影误差：\n\t{homography_reprojection_rmse(x0)}')
+        logger.debug(f'优化之前的重投影误差：\n\t{homography_reprojection_rmse(x0)}')
 
         optimize_result: scipy.optimize.OptimizeResult = scipy.optimize.least_squares(
             residuals_joint,
@@ -912,7 +912,7 @@ class ZhangCameraCalibration:
         K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, n_views)
         K_opt /= K_opt[2, 2]  # 相机内参矩阵归一化
 
-        print(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt)}')
+        logger.debug(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt)}')
 
         for idx in range(len(list_of_pixel_2d_homo)):
             CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K_opt, rvecs_opt, tvecs_opt, idx)
@@ -1288,7 +1288,7 @@ def run():
 
 
 if __name__ == '__main__':
-    # init()  # 生成模型点和像素点
+    init()  # 生成模型点和像素点
 
     saved_data = load_mat('zhang.mat')
     image_size = saved_data['image_size']
