@@ -663,14 +663,14 @@ class ZhangCameraCalibration:
                 # 提取单应性的第 col 列向量的第 row 分量（即单应性的第 row 行第 col 列元素）
                 return homography[row-1, col-1]
 
-            return np.array([
+            return np.array([  # 返回行向量 v_ij.T
                 h(i, 1) * h(j, 1),
                 h(i, 1) * h(j, 2) + h(i, 2) * h(j, 1),
                 h(i, 2) * h(j, 2),
                 h(i, 3) * h(j, 1) + h(i, 1) * h(j, 3),
                 h(i, 3) * h(j, 2) + h(i, 2) * h(j, 3),
                 h(i, 3) * h(j, 3),
-            ])
+            ], dtype=np.float64)
 
         V = np.vstack(list([
             v_constraint(homography, 1, 2),                                     # v_12.T
