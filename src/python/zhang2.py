@@ -270,7 +270,7 @@ def homo2nonhomo(points: np.ndarray) -> np.ndarray:
     :return: 点的非齐次坐标
     :rtype: NDArray[float64]
     """
-    assert points.ndim == 3 and points.shape[-1] == 3
+    assert points.ndim == 2 and points.shape[-1] == 3, f'{points.ndim=}, {points.shape=}'
     denom = points[:, 2:3]  # 齐次分量
     # 防止除以接近0的值，使用一个极小值
     denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)  # 避免除零错误
@@ -863,10 +863,14 @@ class ZhangCameraCalibration:
             K /= K[2, 2]  # 相机内参矩阵归一化
             residuals = []
 
+            assert model_2d_homo.ndim == 2 and model_2d_homo.shape[1] == 3, \
+                f'{model_2d_homo.ndim=}, {model_2d_homo.shape=}'
+
             for rv, tv, pixel_2d_homo in zip(rvecs, tvecs, list_of_pixel_2d_homo):
                 tv = tv.reshape(3, 1)
                 R = rodrigues(rv)  # 利用旋转参数 rv 构造旋转矩阵 R。
                 H = CameraModel.make_homography(K, R, tv)  # 利用相机内参矩阵 K、旋转矩阵 R 和平移向量 tv 构造单应性 H。
+                assert H.shape == (3, 3), f'{H.shape=}'
                 reprojection_points_homo = model_2d_homo @ H.T  # 重投影，产出像素点的齐次坐标
                 reprojection_points_nonhomo = homo2nonhomo(reprojection_points_homo)
                 pixel_2d_nonhomo = homo2nonhomo(pixel_2d_homo)
