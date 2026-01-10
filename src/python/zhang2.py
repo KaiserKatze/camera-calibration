@@ -732,6 +732,8 @@ class ZhangCameraCalibration:
         # 计算矩阵 V 的条件数
         # print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
 
+        logger.debug(f'矩阵 V 的秩为 rank(V)={np.linalg.matrix_rank(V)}')
+
         _, S, Vh = svd(V)
 
         abs_singular_value = abs(S)
