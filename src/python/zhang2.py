@@ -261,7 +261,7 @@ def print_all_conditions_of_matrix(matrix: np.ndarray, name: str) -> None:
     最大值    \t= {cond_max:.6e}\t{ill_max}''')
 
 
-def homo2nonhomo(points: np.ndarray):
+def homo2nonhomo(points: np.ndarray) -> np.ndarray:
     """
     将齐次坐标 (X,Y,W) 转换为非齐次坐标 (u,v)
 
@@ -270,6 +270,7 @@ def homo2nonhomo(points: np.ndarray):
     :return: 点的非齐次坐标
     :rtype: NDArray[float64]
     """
+    assert points.ndim == 3 and points.shape[-1] == 3
     denom = points[:, 2:3]  # 齐次分量
     # 防止除以接近0的值，使用一个极小值
     denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)  # 避免除零错误
@@ -867,20 +868,8 @@ class ZhangCameraCalibration:
                 R = rodrigues(rv)  # 利用旋转参数 rv 构造旋转矩阵 R。
                 H = CameraModel.make_homography(K, R, tv)  # 利用相机内参矩阵 K、旋转矩阵 R 和平移向量 tv 构造单应性 H。
                 reprojection_points_homo = model_2d_homo @ H.T  # 重投影，产出像素点的齐次坐标
-                reprojection_denom = reprojection_points_homo[:, 2:3]  # 重投影 W 坐标
-                reprojection_denom = np.where(
-                    np.abs(reprojection_denom) < 1e-12,
-                    np.sign(reprojection_denom) * 1e-12,
-                    reprojection_denom
-                )
-                reprojection_points_nonhomo = reprojection_points_homo[:, :2] / reprojection_denom
-                pixel_2d_homo_denom = pixel_2d_homo[:, 2:3]  # 实际观测到的像素点的 W 坐标
-                pixel_2d_homo_denom = np.where(
-                    np.abs(pixel_2d_homo_denom) < 1e-12,
-                    np.sign(pixel_2d_homo_denom) * 1e-12,
-                    pixel_2d_homo_denom
-                )
-                pixel_2d_nonhomo = pixel_2d_homo[:, :2] / pixel_2d_homo_denom
+                reprojection_points_nonhomo = homo2nonhomo(reprojection_points_homo)
+                pixel_2d_nonhomo = homo2nonhomo(pixel_2d_homo)
                 diff = (reprojection_points_nonhomo - pixel_2d_nonhomo).reshape(-1)
                 residuals.append(diff)
 
@@ -1122,9 +1111,7 @@ def compare_with_opencv():
         pts = np.asarray(pts)
         # 常见情形: (M,3) 齐次坐标
         if pts.ndim == 2 and pts.shape[1] == 3:
-            denom = pts[:, 2:3]
-            denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
-            uv = pts[:, :2] / denom
+            uv = homo2nonhomo(pts)
         # 也可能是 (M,2)
         elif pts.ndim == 2 and pts.shape[1] == 2:
             uv = pts
@@ -1132,9 +1119,7 @@ def compare_with_opencv():
         else:
             pts_flat = pts.reshape(-1, pts.shape[-1])
             if pts_flat.shape[1] == 3:
-                denom = pts_flat[:, 2:3]
-                denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
-                uv = pts_flat[:, :2] / denom
+                uv = homo2nonhomo(pts_flat)
             elif pts_flat.shape[1] == 2:
                 uv = pts_flat
             else:
