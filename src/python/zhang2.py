@@ -1032,11 +1032,11 @@ def init():
         list_of_image_points.append(image_points)
 
     for angle_y in itertools.chain.from_iterable([
-        range(-60, 0, 15),
-        range(15, 61, 15),
+        range(-105, 0, 30),
+        range(15, 110, 30),
     ]):
-        print(f'Rotation(0, {angle_y}, 0)')
-        rotation = Rotation(0.0, angle_y, 0.0).R
+        print(f'Rotation(0, {angle_y * 0.5}, 0)')
+        rotation = Rotation(0.0, angle_y * 0.5, 0.0).R
         translation = Translation.randomize().T
         _, image_points, _, _, _ = projection_model._arbitrary_project(model_points, rotation, translation, noise=None)
         list_of_image_points.append(image_points)
