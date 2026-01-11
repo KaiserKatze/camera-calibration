@@ -746,7 +746,7 @@ class ZhangCameraCalibration:
         logger.debug(f'矩阵 V 的奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
                         + f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
                         + f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
-                        + f'\t矩阵 V 的谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :2f}')
+                        + f'\t矩阵 V 的谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :.6e}')
 
         if min_abs_singular_value < 1e-12:
             logger.warning('矩阵V的最小奇异值接近0，可能导致数值不稳定')
@@ -832,7 +832,7 @@ class ZhangCameraCalibration:
             lambda2 = 1.0 / np.linalg.norm(Kinv @ h2)
 
             if abs(lambda1 - lambda2) > 1e-4:
-                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}')
+                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}, δ={abs(lambda1 - lambda2):.8f}')
 
             # print(f'>>>>>>>>>>>>>>>>>>> h1 -> ', h1)
             # print(f'>>>>>>>>>>>>>>>>>>> h2 -> ', h2)
