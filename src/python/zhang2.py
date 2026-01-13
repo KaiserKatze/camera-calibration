@@ -12,6 +12,7 @@ import numpy as np
 import scipy.optimize
 import scipy
 import scipy.io
+import scipy.spatial.transform
 import matplotlib.pyplot as plt
 from sklearn.cluster import DBSCAN
 
@@ -147,6 +148,17 @@ def inv_rodrigues(R: np.ndarray) -> np.ndarray:
     return r_vec
 
 
+def min_max(iterable, dtype=np.float64) -> tuple[float, float]:
+    min_val = dtype('inf')
+    max_val = dtype('-inf')
+    # 在迭代过程中直接更新
+    for value in iterable:
+        if value < min_val:
+            min_val = value
+        if value > max_val:
+            max_val = value
+    return min_val, max_val
+
 
 def normalize_points(points):
     """
@@ -185,11 +197,14 @@ def normalize_points(points):
         [scale, 0, -scale * cx],
         [0, scale, -scale * cy],
         [0, 0, 1]
-    ])
+    ], dtype=np.float64)
 
     # 应用变换矩阵得到归一化后的点
     # 首先转换为齐次坐标 (N, 3)
-    points_homo = np.hstack((points, np.ones((points.shape[0], 1))))
+    points_homo = np.hstack(
+        (points, np.ones((points.shape[0], 1))),
+        dtype=np.float64,
+    )
     # 矩阵乘法: (T @ point.T).T
     normalized_points_homo = (T @ points_homo.T).T
 
@@ -201,23 +216,24 @@ def normalize_points(points):
 def generate_model_points():
     """
     生成模型平面。
-    一共生成 N = m * n * 4 个点。
+    一共生成 N = ni * nj 个点。
 
     Returns:
         points_2d_homo: 模型点齐次坐标，形状为 (N, 3)。
     """
 
-    n = 3  # 网格列数
+    ni = 3  # 网格列数
+    nj = 3  # 网格行数
     a = 25  # 每个黑色正方形的边长（像素）
 
     points_2d = []
-    for i in range(n):
-        for j in range(n):
+    for i in range(ni):
+        for j in range(nj):
             # 计算当前正方形的左上角坐标
             points_2d.append(
                 (i * a, j * a)
             )
-    assert len(points_2d) == n * n
+    assert len(points_2d) == ni * nj
     points_2d = np.array(points_2d, dtype=np.float64)
 
     # 居中
@@ -234,7 +250,10 @@ def generate_model_points():
     # 转换为齐次坐标 `(x,y,1)`，第三个分量为 1
     num_points = points_2d.shape[0]
     ones = np.ones((num_points, 1))
-    points_2d_homo = np.hstack((points_2d, ones))
+    points_2d_homo = np.hstack(
+        (points_2d, ones),
+        dtype=np.float64,
+    )
     assert points_2d_homo.shape[1] == 3
     return points_2d_homo
 
@@ -261,7 +280,7 @@ def print_all_conditions_of_matrix(matrix: np.ndarray, name: str) -> None:
     最大值    \t= {cond_max:.6e}\t{ill_max}''')
 
 
-def homo2nonhomo(points: np.ndarray):
+def homo2nonhomo(points: np.ndarray) -> np.ndarray:
     """
     将齐次坐标 (X,Y,W) 转换为非齐次坐标 (u,v)
 
@@ -270,90 +289,46 @@ def homo2nonhomo(points: np.ndarray):
     :return: 点的非齐次坐标
     :rtype: NDArray[float64]
     """
+    assert points.ndim == 2 and points.shape[-1] == 3, f'{points.ndim=}, {points.shape=}'
     denom = points[:, 2:3]  # 齐次分量
-    # 防止除以接近0的值，使用一个极小值
-    denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)  # 避免除零错误
-    points = points[:, :2] / denom
+    # 防止除以接近0的值，使用一个很小的数
+    denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+    points = points[:, 0:2] / denom
     return points
 
 
-def homography_reprojection_rmse(H: np.ndarray, model_2d_homo: np.ndarray, image_points_homo: np.ndarray) -> float:
+def assert_condition_number(list_of_homography: list[np.ndarray], cond_threshold: float = 1e6) -> list[int]:
     """
-    计算单个单应性 H 下的重投影 RMSE（像素）。
-    model_2d_homo: shape (M,3)
-    image_points_homo: shape (M,3)
-    返回 RMSE（float）
+    根据单应性 H 的条件数筛选视图
+
+    :param list_of_homography: 单应性列表
+    :type list_of_homography: list[np.ndarray]
+    :param cond_threshold: 条件数
+    :type cond_threshold: float
+    :return: 需要保留的单应性在列表中的序号
+    :rtype: list[int]
     """
-    # 预测像素齐次 coords
-    pred_h = (H @ model_2d_homo.T).T  # shape (M,3)
-    denom_pred = pred_h[:, 2:3]
-    # 防止除以接近0的值
-    denom_pred = np.where(np.abs(denom_pred) < 1e-12, np.sign(denom_pred) * 1e-12, denom_pred)
-    uv_pred = pred_h[:, :2] / denom_pred
 
-    denom_obs = image_points_homo[:, 2:3]
-    # 防止除以接近0的值
-    denom_obs = np.where(np.abs(denom_obs) < 1e-12, np.sign(denom_obs) * 1e-12, denom_obs)
-    uv_obs = image_points_homo[:, :2] / denom_obs
-
-    err = uv_obs - uv_pred
-    rmse = np.sqrt(np.mean(np.sum(err**2, axis=1)))
-    return float(rmse)
-
-
-def filter_homographies(list_of_homography, list_of_image_points, model_2d_homo,
-                        rmse_threshold: float = 5.0,
-                        cond_threshold: float = 1e6):
-    """
-    根据单应性重投影 RMSE 和 H 的 condition number 筛选视图。
-    返回筛选后的 (homographies, image_points)
-    参数:
-      rmse_threshold: 若单视图 RMSE > 阈值（像素），则剔除该视图
-      cond_threshold: 若 np.linalg.cond(H) > 阈值，也剔除
-    """
-    keep_h = []
-    keep_img = []
-    for H, img in zip(list_of_homography, list_of_image_points):
-        H = H.astype(np.float64)
-        img = np.asarray(img, dtype=np.float64)
-        # rmse
+    kept_idx = []
+    for idx, homography in enumerate(list_of_homography):
+        # 计算条件数
         try:
-            rmse = homography_reprojection_rmse(H, model_2d_homo, img)
-        except Exception:
-            # 出错则丢弃
-            continue
-
-        # cond number (对 H 或对 H[:,:2] 的列做条件数检测)
-        try:
-            cond_H = np.linalg.cond(H)
+            cond_H = np.linalg.cond(homography)
         except Exception:
             cond_H = np.inf
 
-        # 也可检查 H 的奇异值差距
-        _, svals, _ = svd(H)
-        s_ratio = float(svals[0] / (svals[-1] + 1e-16))
+        if cond_H < cond_threshold:
+            kept_idx.append(idx)
 
-        # 判定是否保留
-        keep = True
-        if rmse > rmse_threshold:
-            logger.debug(f'单应性的 {rmse=:.6e} > {rmse_threshold=:.6e}，丢弃!')
-            keep = False
-        if cond_H > cond_threshold:
-            logger.debug(f'单应性的 {cond_H=:.6e} > {cond_threshold=:.6e}，丢弃!')
-            keep = False
-        # 若奇异值跨度过大也剔除
-        if s_ratio > 1e8:
-            keep = False
-
-        if keep:
-            keep_h.append(H)
-            keep_img.append(img)
-    return keep_h, keep_img
+    remain_ratio = len(kept_idx) / max(1, len(list_of_homography))
+    logger.debug(f'条件数筛选剩余率 = {remain_ratio * 100:.2f}%')
+    return kept_idx
 
 
 class Rotation:
     def __init__(self, Rx: float, Ry: float, Rz: float):
-        self.R = scipy.spatial.transform.Rotation.from_euler('xyz', [Rx, Ry, Rz], degrees=True).as_matrix()
+        R_inst = scipy.spatial.transform.Rotation.from_euler('xyz', [Rx, Ry, Rz], degrees=True)
+        self.R = np.asarray(R_inst.as_matrix(), dtype=np.float64)
         self.Rx = Rx
         self.Ry = Ry
         self.Rz = Rz
@@ -363,15 +338,16 @@ class Rotation:
 
     @classmethod
     def randomize(cls):
-        Rx = np.random.uniform(-60, 60)
-        Ry = np.random.uniform(-60, 60)
-        Rz = np.random.uniform(-60, 60)
+        max_angle = 30
+        Rx = np.random.uniform(-max_angle, max_angle)
+        Ry = np.random.uniform(-max_angle, max_angle)
+        Rz = np.random.uniform(-max_angle, max_angle)
         return cls(Rx, Ry, Rz)
 
 
 class Translation:
     def __init__(self, Tx: float, Ty: float, Tz: float):
-        self.T = np.array([[Tx], [Ty], [Tz]])
+        self.T = np.array([[Tx], [Ty], [Tz]], dtype=np.float64)
         self.Tx = Tx
         self.Ty = Ty
         self.Tz = Tz
@@ -381,29 +357,67 @@ class Translation:
 
     @classmethod
     def randomize(cls):
-        Tx = np.random.uniform(-100, 100)
-        Ty = np.random.uniform(-100, 100)
-        Tz = np.random.uniform(1000, 1500)
+        Tz = np.random.uniform(30000, 50000)
+        range_x = Tz * 0.2
+        range_y = Tz * 0.2
+        Tx = np.random.uniform(-range_x, range_x)
+        Ty = np.random.uniform(-range_y, range_y)
         return cls(Tx, Ty, Tz)
 
 
 class CameraModel:
     def __init__(self, d: float, a: float, b: float, theta: float, u0: float, v0: float):
+        """
+        建立相机投影模型
+
+        :param d: 光心到像平面的距离
+        :type d: float
+        :param a: 传感器的横向尺寸
+        :type a: float
+        :param b: 传感器的纵向尺寸
+        :type b: float
+        :param theta: 传感器相邻两边的夹角
+        :type theta: float
+        :param u0: 光心在像素坐标系中的横坐标
+        :type u0: float
+        :param v0: 光心在像素坐标系中的纵坐标
+        :type v0: float
+        """
         alpha = d / a
         beta = d / b
+        logger.warning('当前实现没有使用 `theta` 参数!')
         self.K = np.array([
-            [alpha, -alpha / np.tan(theta), u0],
-            [0, beta / np.sin(theta), v0],
+            # [alpha, -alpha / np.tan(theta), u0],
+            # [0, beta / np.sin(theta), v0],
+            [alpha, 0, u0],
+            [0, beta, v0],
             [0, 0, 1],
-        ])
-        print('内参矩阵 K=\n', self.K)
-        Kinv = np.linalg.inv(self.K)
-        print('基本矩阵 B=\n', Kinv.T @ Kinv)
+        ], dtype=np.float64)
+
+    @staticmethod
+    def make_homography(intrinsic_matrix: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
+        """
+        依据相机内参矩阵、旋转矩阵、平移向量，计算“单应性”。
+        这里产出的“单应性”只能与 Z=0 的模型点坐标相乘！
+
+        :param intrinsic_matrix: 相机内参矩阵
+        :type intrinsic_matrix: np.ndarray
+        :param rotation: 旋转矩阵
+        :type rotation: np.ndarray
+        :param translation: 平移向量
+        :type translation: np.ndarray
+        :return: 单应性
+        :rtype: ndarray[_AnyShape, dtype[Any]]
+        """
+        return intrinsic_matrix @ np.hstack(
+            (rotation[:, :2], translation),
+            dtype=np.float64,
+        )
 
     def _arbitrary_project(self, model_2d_homo: np.ndarray,
                            rotation: np.ndarray,
                            translation: np.ndarray,
-                           noise: float | None = 0.5):
+                           noise: float = None):
         """
         将世界坐标系中的模型点投影到像素坐标系，输入模型点的齐次坐标，返回像素点的齐次坐标
 
@@ -419,18 +433,22 @@ class CameraModel:
         # logger.debug('\n' * 5)
         # logger.debug(f'模型点的二维齐次坐标 model_2d_homo=\n{model_2d_homo[:5]}')
         # 计算单应性 H
-        H = self.K @ np.hstack((rotation[:, :2], translation))
+        H = self.make_homography(self.K, rotation, translation)
         assert H.shape == (3, 3)
-        print('单应性 H=\n', H)
 
         # 检查H矩阵是否接近奇异（条件数过大）
         cond_H = np.linalg.cond(H)
         if cond_H > 1e12:
             logger.warning(f'单应性矩阵条件数过大: {cond_H:.6e}, 可能导致数值不稳定')
 
-        # logger.debug(f'真实的旋转矩阵 R=\n{rotation}')
-        # logger.debug(f'真实的平移向量 T=\n{translation}')
-        # logger.debug(f'真实的单应性 H=\n{H}')
+        logger.debug(
+            '\n' * 2 +
+            f'真实的旋转矩阵 R=\n{rotation}\n\tdet(R)={np.round(np.linalg.det(rotation), 4)}\n'
+            f'真实的平移向量 T=\n{translation}\n'
+            f'真实的单应性 H=\n{H}\n'
+            f'\t\t条件数=\n{cond_H}'
+        )
+
         # 计算像素点的齐次坐标
         pixel_2d_homo = model_2d_homo @ H.T
 
@@ -439,28 +457,30 @@ class CameraModel:
             raise ValueError('投影结果包含无穷大或NaN值')
 
         # 计算像素点的非齐次坐标
-        pixel_2d = pixel_2d_homo[:, :2] / pixel_2d_homo[:, 2:3]
+        pixel_2d_nonhomo = homo2nonhomo(pixel_2d_homo)
 
-        # print('模型点的齐次坐标 model_2d_homo=\n', model_2d_homo)
-        # print('像素点的齐次坐标 pixel_2d_homo=\n', pixel_2d_homo)
-        # print('像素的非齐次坐标 pixel_2d=\n', pixel_2d)
-
-        if noise is not None:
+        if noise is not None:  # 添加高斯噪声
             # 给像素点的非齐次坐标添加高斯噪声（均值=0，标准差=0.5 像素）
-            noise = np.random.normal(0, 0.5, pixel_2d.shape)
-            pixel_2d += noise
-        # 返回像素点的齐次坐标
-        num_points = pixel_2d.shape[0]
-        ones = np.ones((num_points, 1))
-        pixel_2d_homo = np.hstack((pixel_2d, ones))
-        assert pixel_2d_homo.shape[1] == 3
+            logger.debug('正在添加高斯噪声 ...')
+            noise_array = np.random.normal(0, noise, pixel_2d_nonhomo.shape)
+            pixel_2d_nonhomo += noise_array
+
+        # 重新组装像素点的齐次坐标
+        pixel_2d_homo = np.hstack(
+            (pixel_2d_nonhomo, np.ones((pixel_2d_nonhomo.shape[0], 1))),
+            dtype=np.float64,
+        )
+
+        assert pixel_2d_homo.shape == model_2d_homo.shape, \
+            f'{pixel_2d_homo.shape=}, {model_2d_homo.shape=}'
+
         return model_2d_homo, pixel_2d_homo, rotation, translation, H
 
-    def randomly_project(self, model_2d_homo: np.ndarray):
+    def randomly_project(self, model_2d_homo: np.ndarray, noise=None):
         # 随机生成旋转矩阵和位移向量
         rotation = Rotation.randomize().R
         translation = Translation.randomize().T
-        return self._arbitrary_project(model_2d_homo, rotation, translation)
+        return self._arbitrary_project(model_2d_homo, rotation, translation, noise)
 
     def identity_project(self, model_2d_homo: np.ndarray):
         rotation = np.identity(3, dtype=np.float64)
@@ -468,14 +488,15 @@ class CameraModel:
         return self._arbitrary_project(model_2d_homo, rotation, translation, noise=None)
 
     @staticmethod
-    def visualize_projection(objpoints: np.ndarray, imgpoints: list[np.ndarray], view_index: int = 0):
+    def visualize_projection(objpoints: np.ndarray, imgpoints: list[np.ndarray],
+                             view_index: int = 0, path_fig: str = None):
         """
         可视化第 view_index 个视图的模型点与投影点
         """
-        objpoints = objpoints[:, 0:2]
-        imgpoints = imgpoints[view_index, :, 0:2]
-        print('objpoints=\n', objpoints)
-        print('imgpoints=\n', imgpoints)
+        # print('objpoints=\n', objpoints)
+        # print('imgpoints=\n', imgpoints[view_index])
+        objpoints = homo2nonhomo(objpoints)
+        imgpoints = homo2nonhomo(imgpoints[view_index])
         obj_obs = objpoints.reshape(-1, 2)
         img_obs = imgpoints.reshape(-1, 2)
         assert img_obs.shape[0] == obj_obs.shape[0]
@@ -490,12 +511,51 @@ class CameraModel:
                 'g-', linewidth=0.5,
             )
         plt.gca().invert_yaxis()  # 图像坐标通常原点在左上
-        plt.legend()
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        plt.tight_layout()
         plt.title(f"第 {view_index} 个机位下 模型点-像素点 映射关系")
-        path_fig = f'fig-{view_index}-projection.png'
-        print('saving figure to:', os.path.abspath(path_fig))
-        # plt.show()
+        if path_fig is None:
+            path_fig = f'fig-{view_index}-projection.png'
+        logger.debug(f'saving figure to: {os.path.abspath(path_fig)!r}')
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
+        plt.close()
+
+    @staticmethod
+    def visualize_reprojection(objpoints: np.ndarray, imgpoints: list[np.ndarray],
+                               estimated_intrinsic_matrix: np.ndarray,
+                               rvecs: list[np.ndarray], tvecs: list[np.ndarray],
+                               view_index: int = 0, path_fig: str = None):
+        K = estimated_intrinsic_matrix
+        rv = rvecs[view_index]
+        tv = tvecs[view_index]
+        tv = tv.reshape(3, 1)
+        R = rodrigues(rv)  # 利用旋转参数 rv 构造旋转矩阵 R。
+        H = CameraModel.make_homography(K, R, tv)  # 利用相机内参矩阵 K、旋转矩阵 R 和平移向量 tv 构造单应性 H。
+        reprojection_points_homo = objpoints @ H.T  # 重投影，产出像素点的齐次坐标
+        # print('rpipoints=\n', reprojection_points_homo)
+        # print('imgpoints=\n', imgpoints[view_index])
+        rpipoints = homo2nonhomo(reprojection_points_homo)
+        imgpoints = homo2nonhomo(imgpoints[view_index])
+        assert rpipoints.shape[0] == imgpoints.shape[0]
+
+        plt.figure()
+        plt.scatter(imgpoints[:, 0], imgpoints[:, 1], c='b', marker='x', label='观测的像素点')
+        plt.scatter(rpipoints[:, 0], rpipoints[:, 1], c='r', marker='o', label='重投影像素点')
+        for i in range(imgpoints.shape[0]):
+            plt.plot(
+                [imgpoints[i, 0], rpipoints[i, 0]],
+                [imgpoints[i, 1], rpipoints[i, 1]],
+                'g-', linewidth=0.5,
+            )
+        plt.gca().invert_yaxis()  # 图像坐标通常原点在左上
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        plt.tight_layout()
+        plt.title(f"第 {view_index} 个机位下 重投影 映射关系")
+        if path_fig is None:
+            path_fig = f'fig-{view_index}-reprojection.png'
+        logger.debug(f'saving figure to: {os.path.abspath(path_fig)!r}')
+        plt.savefig(path_fig, dpi=150, bbox_inches='tight')
+        plt.close()
 
 
 class ZhangCameraCalibration:
@@ -518,8 +578,10 @@ class ZhangCameraCalibration:
         #     [Mn.T, 0, - un * Mn.T],
         #     [0, Mn.T, - vn * Mn.T],
         # ]
-        assert model.shape[1] == pixel.shape[1] == 3, '必须输入模型点、像素点的二维齐次坐标!'
-        assert model.shape[0] == pixel.shape[0] > 6, '样本数量太少!'
+        if not (model.shape[1] == pixel.shape[1] == 3):
+            raise ValueError('必须输入模型点、像素点的二维齐次坐标!')
+        if not (model.shape[0] == pixel.shape[0] > 6):
+            logger.warning('样本数量太少!')
         model_h = model.shape[0]
         # 检查输入是否包含无穷大或NaN值
         if np.any(np.isinf(model)) or np.any(np.isnan(model)) or np.any(np.isinf(pixel)) or np.any(np.isnan(pixel)):
@@ -532,78 +594,62 @@ class ZhangCameraCalibration:
         # logger.debug(f'u=\n{u[:5]}')
         # logger.debug(f'v=\n{v[:5]}')
         # logger.debug(f'model=\n{model[:5]}')
-        row1 = np.hstack([model, zeros, -u * model])
+        row1 = np.hstack(
+            [model, zeros, -u * model],
+            dtype=np.float64,
+        )
         assert row1.shape == (model_h, 9)
         # logger.debug(f'row1=\n{row1[:5]}')
-        row2 = np.hstack([zeros, model, -v * model])
+        row2 = np.hstack(
+            [zeros, model, -v * model],
+            dtype=np.float64,
+        )
         assert row2.shape == (model_h, 9)
         # logger.debug(f'row2=\n{row2[:5]}')
-        L = np.vstack([row1, row2])
+        L = np.vstack(
+            [row1, row2],
+            dtype=np.float64,
+        )
         # logger.debug(f'用来求解单应性的系数矩阵 L=\n{L}')
         assert L.shape == (2 * model_h, 9)
-
-        # 检查L矩阵是否包含无穷大或NaN值
-        if np.any(np.isinf(L)) or np.any(np.isnan(L)):
-            logger.warning('系数矩阵L包含无穷大或NaN值，返回单位矩阵')
 
         _, _, Vh = svd(L)
         m = Vh[-1, :]
         assert len(m) == 9  # 可以估计单应性的全部三个行向量
-        estimated_homography = m.reshape((3,3))
-
-        print('估计的单应性 H=\n', estimated_homography)
+        estimated_homography = m.reshape((3, 3))
 
         # 检查估计的单应性是否包含无穷大或NaN值
         if np.any(np.isinf(estimated_homography)) or np.any(np.isnan(estimated_homography)):
-            logger.warning('估计的单应性包含无穷大或NaN值，返回单位矩阵')
+            logger.warning('估计的单应性包含无穷大或NaN值!')
 
         normalized_estimated_homography = estimated_homography / estimated_homography[2,2]
         return normalized_estimated_homography
-
-    @classmethod
-    def infer_homography_without_radial_distortion_with_zscore_scaling(cls, model: np.ndarray, pixel: np.ndarray):
-        # 归一化 (Normalization)
-        model_nonhomo = model[:, :2]
-        pixel_nonhomo = pixel[:, :2]
-        mean_model = np.mean(model_nonhomo, axis=0)
-        std_model = np.std(model_nonhomo, axis=0)
-        mean_pixel = np.mean(pixel_nonhomo, axis=0)
-        std_pixel = np.std(pixel_nonhomo, axis=0)
-
-        # 防止标准差为0的情况
-        std_model = np.where(std_model < 1e-8, 1.0, std_model)
-        std_pixel = np.where(std_pixel < 1e-8, 1.0, std_pixel)
-
-        model_nonhomo_norm = (model_nonhomo - mean_model) / std_model
-        pixel_nonhomo_norm = (pixel_nonhomo - mean_pixel) / std_pixel
-        # 构建齐次坐标 (Homogeneous Coordinates)
-        model_norm = np.hstack([model_nonhomo_norm, model[:, 2:3]])
-        pixel_norm = np.hstack([pixel_nonhomo_norm, pixel[:, 2:3]])
-        # 利用 svd 估计单应性
-        homography = cls.infer_homography_without_radial_distortion(model_norm, pixel_norm)
-        # 将 homography 的最后一个元素归一化为 1
-        homography = homography / homography[2, 2]
-        return homography
 
     @classmethod
     def infer_homography_without_radial_distortion_with_isotropic_scaling(cls, model: np.ndarray, pixel: np.ndarray):
         # 数据准备：截取模型点的前两列 (X, Y)
         model_nonhomo = model[:, :2]
         pixel_nonhomo = pixel[:, :2]
-        # 归一化 (Normalization)
+        # 各向同性归一化 (Isotropic Normalization)
         model_nonhomo_norm, T_model = normalize_points(model_nonhomo)
         pixel_nonhomo_norm, T_pixel = normalize_points(pixel_nonhomo)
         # 构建齐次坐标 (Homogeneous Coordinates)
-        model_norm = np.hstack([model_nonhomo_norm, model[:, 2:3]])
-        pixel_norm = np.hstack([pixel_nonhomo_norm, pixel[:, 2:3]])
+        model_norm = np.hstack(
+            [model_nonhomo_norm, model[:, 2:3]],
+            dtype=np.float64,
+        )
+        pixel_norm = np.hstack(
+            [pixel_nonhomo_norm, pixel[:, 2:3]],
+            dtype=np.float64,
+        )
         # 利用 svd 估计单应性
         homography_norm = cls.infer_homography_without_radial_distortion(model_norm, pixel_norm)
         # 去归一化 (Denormalization)
-        # H = inv(T_pixel) * homography_norm * T_model
+        #       H = inv(T_pixel) * homography_norm * T_model
         # 这里的变换关系推导如下：
-        # pixel_nonhomo_norm = homography_norm * model_nonhomo_norm
-        # T_pixel * pixel = homography_norm * T_model * model
-        # pixel = (inv(T_pixel) * homography_norm * T_model) * model
+        #       pixel_nonhomo_norm = homography_norm * model_nonhomo_norm
+        #       T_pixel * pixel = homography_norm * T_model * model
+        #       pixel = (inv(T_pixel) * homography_norm * T_model) * model
         homography = np.linalg.pinv(T_pixel) @ homography_norm @ T_model
         # 将 homography 的最后一个元素归一化为 1
         homography = homography / homography[2, 2]
@@ -618,6 +664,24 @@ class ZhangCameraCalibration:
         A_pd = (eigen_vectors * eigen_values_clipped) @ eigen_vectors.T
         return 0.5 * (A_pd + A_pd.T)
 
+    @staticmethod
+    def approximate_rotation_matrix(matrix_Q: np.ndarray):
+        """
+        利用基本矩阵计算得到的“旋转矩阵” Q 可能不符合旋转矩阵的正交性（Q^T Q = I），
+        因此需要在 F 范数意义下，将它映射为一个“最佳的”旋转矩阵 R 使得 R^T R = I 成立。
+
+        :param matrix_Q: 现有的“旋转矩阵”
+        :type matrix_Q: np.ndarray
+        """
+        U, _, Vt = svd(matrix_Q)
+        matrix_R = U @ Vt
+        # Ensure det positive
+        if (det_R := np.linalg.det(matrix_R)) < 0:
+            logger.warning(f'近似旋转矩阵 R=\n{matrix_R} 的行列式 {det_R:.4f} < 0')
+            U[:, -1] *= -1
+            matrix_R = U @ Vt
+        return matrix_R
+
     @classmethod
     def extract_intrinsic_parameters_from_homography(cls, list_of_homography: typing.List[np.ndarray],
                                                      model_2d_homo: np.ndarray,
@@ -627,20 +691,22 @@ class ZhangCameraCalibration:
         把相机内部参数逐个提取出来
         """
 
-        assert len(list_of_homography) == len(list_of_pixel_2d_homo)
+        assert len(list_of_homography) == len(list_of_pixel_2d_homo) > 1, \
+            f'单应性列表长度应大于零! {len(list_of_homography)=}， {len(list_of_pixel_2d_homo)=}'
 
         def v_constraint(homography: np.ndarray, i: int, j: int):
-            def h(x: int, y: int):
-                return homography[x-1, y-1]
+            def h(col: int, row: int):
+                # 提取单应性的第 col 列向量的第 row 分量（即单应性的第 row 行第 col 列元素）
+                return homography[row-1, col-1]
 
-            return np.array([
+            return np.array([  # 返回行向量 v_ij.T
                 h(i, 1) * h(j, 1),
                 h(i, 1) * h(j, 2) + h(i, 2) * h(j, 1),
                 h(i, 2) * h(j, 2),
                 h(i, 3) * h(j, 1) + h(i, 1) * h(j, 3),
                 h(i, 3) * h(j, 2) + h(i, 2) * h(j, 3),
                 h(i, 3) * h(j, 3),
-            ])
+            ], dtype=np.float64)
 
         V = np.vstack(list([
             v_constraint(homography, 1, 2),                                     # v_12.T
@@ -651,7 +717,7 @@ class ZhangCameraCalibration:
 
         # # 视图筛选（剔除病态或重投影误差大的视图）
         # logger.debug(f'筛选前有 {len(list_of_homography)} 个视图')
-        # list_of_homography_filtered, list_of_pixel_2d_homo_filtered = filter_homographies(
+        # list_of_homography_filtered, list_of_pixel_2d_homo_filtered = assert_condition_number(
         #     list_of_homography, list_of_pixel_2d_homo, model_2d_homo,
         #     rmse_threshold=5.0, cond_threshold=1e6
         # )
@@ -661,27 +727,30 @@ class ZhangCameraCalibration:
 
         # 检查V矩阵是否包含无穷大或NaN值
         if np.any(np.isinf(V)) or np.any(np.isnan(V)):
-            logger.warning('矩阵V包含无穷大或NaN值，使用默认内参矩阵')
+            logger.warning('矩阵V包含无穷大或NaN值!')
 
         # 计算矩阵 V 的条件数
-        # print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
+        print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
 
         _, S, Vh = svd(V)
+
         abs_singular_value = abs(S)
-        min_abs_singular_value = abs_singular_value.min()
-        max_abs_singular_value = abs_singular_value.max()
+        min_abs_singular_value, max_abs_singular_value = min_max(abs_singular_value)
+
+        logger.debug(
+            f'矩阵 V =\n{V}\n'
+            f'\t形状为 {V.shape=}\n'
+            f'\trank(V)={np.linalg.matrix_rank(V)}\n'
+            f'\t奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
+            f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
+            f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
+            f'\t谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :.6e}'
+        )
 
         if min_abs_singular_value < 1e-12:
             logger.warning('矩阵V的最小奇异值接近0，可能导致数值不稳定')
-            # 使用正则化方法求解
-            b = Vh[-1, :]
-        else:
-            logger.debug(f'矩阵 V 的奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
-                         + f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
-                         + f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
-                         + f'\t矩阵 V 的谱条件数 = \t{ max_abs_singular_value / min_abs_singular_value :2f}')
 
-            b = Vh[-1, :]
+        b = Vh[-1, :]
 
         assert b.shape == (6,), f'向量 b 的形状实际上是: {b.shape}'
         B11, B12, B22, B13, B23, B33 = b
@@ -690,20 +759,24 @@ class ZhangCameraCalibration:
             [B12, B22, B23],
             [B13, B23, B33],
         ], dtype=np.float64)
-        print('估计的基本矩阵(未修改符号) B=\n', BB)
+        logger.debug(f'估计的基本矩阵 B=\n{BB}')
+
+        if B11 < 0.0:
+            logger.debug(f'基本矩阵第 1 行第 1 列元素 ({B11:.4e}) 是负数!')
+            BB = -BB
+            # SVD 分解得到的奇异向量 $b$ 是单位向量
+            # 如果 $b$ 是 $Vb=0$ 的解，
+            # 那么 $-b$ 也是 $Vb=0$ 的解
+            # 计算机在计算 SVD 时，输出向量的符号是随机的，取决于具体的数值算法实现
+            # 因此，计算出来的 $B$ 向量整体相差一个负号是非常正常的。
+
+        elif B11 == 0.0:
+            raise ValueError(f'基本矩阵第 1 行第 1 列元素 ({B11:.4e}) 是零!')
 
         # 检查B矩阵元素是否有效
         if np.any(np.isinf(BB)) or np.any(np.isnan(BB)):
             raise ValueError('B矩阵包含无效值，使用默认内参矩阵')
 
-        B11, B12, B22, B13, B23, B33 = b / np.sign(b[0])
-
-        BB = np.array([
-            [B11, B12, B13],
-            [B12, B22, B23],
-            [B13, B23, B33],
-        ])
-        logger.debug(f'估计的基本矩阵(已修改符号) B=\n{BB}')
         principal_minors = [np.linalg.det(BB[:i, :i]) for i in range(1,4)]
         principal_minors_str = ', '.join(['{:.6e}'.format(x) for x in principal_minors])
         logger.debug(f'估计的基本矩阵的顺序主子式 =\n{principal_minors_str}')
@@ -761,104 +834,147 @@ class ZhangCameraCalibration:
         if realK is not None:
             evaluate_relative_error(K, realK)
 
-        rvecs_init = []
-        tvecs_init = []
+        rvecs_init = []  # 旋转参数
+        tvecs_init = []  # 平移参数
         for H in list_of_homography:
             h1, h2, h3 = H.T
             Kinv = np.linalg.inv(K)
-            lambda_ = 1.0 / np.linalg.norm(Kinv @ h1)
+            lambda1 = 1.0 / np.linalg.norm(Kinv @ h1)
+            lambda2 = 1.0 / np.linalg.norm(Kinv @ h2)
 
-            print(f'>>>>>>>>>>>>>>>>>>> h1 -> ', h1)
-            print(f'>>>>>>>>>>>>>>>>>>> h2 -> ', h2)
-            print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h1 -> ', lambda_)
-            print(f'>>>>>>>>>>>>>>>>>>> Kinv @ h2 -> ', 1.0 / np.linalg.norm(Kinv @ h2))
+            if abs(lambda1 - lambda2) > 1e-4:
+                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}, δ={abs(lambda1 - lambda2):.8f}')
 
-            r1 = lambda_ * (Kinv @ h1)
-            r2 = lambda_ * (Kinv @ h2)
-            t = lambda_ * (Kinv @ h3)
+            r1 = lambda1 * (Kinv @ h1)
+            r2 = lambda1 * (Kinv @ h2)
+            t = lambda1 * (Kinv @ h3)
             r3 = np.cross(r1, r2)
             R_approx = np.column_stack([r1, r2, r3])
-            U, _, Vt = svd(R_approx)
-            R = U @ Vt
-            # Ensure det positive
-            if np.linalg.det(R) < 0:
-                U[:, -1] *= -1
-                R = U @ Vt
+            R = cls.approximate_rotation_matrix(R_approx)
+            logger.debug(
+                '\n' * 2 +
+                f'估计的旋转矩阵 =\n{R_approx}\n'
+                f'\tdet = {np.linalg.det(R_approx)}\n'
+                f'拟合的旋转矩阵 =\n{R}\n'
+                f'\tdet = {np.linalg.det(R)}\n'
+                f'平移向量 =\n{t}'
+            )
             rvec = inv_rodrigues(R)
             rvecs_init.append(rvec)
             tvecs_init.append(t)
 
         # 用牛顿法
+
         def pack_params(K: np.ndarray, rvecs: list[np.ndarray], tvecs: list[np.ndarray]) -> np.ndarray:
-            parts = [K.reshape(-1)]
-            for rv, tv in zip(rvecs, tvecs):
-                parts.append(np.asarray(rv).reshape(-1))
-                parts.append(np.asarray(tv).reshape(-1))
-            return np.concatenate(parts).astype(np.float64)
+            """
+            将相机内参矩阵、旋转参数、平移参数全部打包为一个向量
+            """
+            parts = [
+                # 只优化相机内参矩阵的部分参数（共计 5 个参数）
+                [K[0], K[1, 1:]],
+                (rvec.reshape(-1) for rvec in rvecs),
+                (tvec.reshape(-1) for tvec in tvecs),
+            ]
+            return np.concatenate(
+                list(itertools.chain.from_iterable(parts)),
+                dtype=np.float64,
+            )
 
         def unpack_params(x: np.ndarray, n_views: int):
-            K = x[:9].reshape((3,3))
-            rest = x[9:]
-            rvecs = []
-            tvecs = []
-            for i in range(n_views):
-                r = rest[i*6 : i*6 + 3]
-                t = rest[i*6 + 3 : i*6 + 6]
-                rvecs.append(r)
-                tvecs.append(t)
+            """
+            从打包好的向量中拆出相机内参矩阵、旋转参数、平移参数
+            """
+            n_params_in_K = 5
+            x_in_K = x[:n_params_in_K]  # 首先提取相机内部参数
+            K = np.array([  # 构造相机内参矩阵
+                [x_in_K[0], x_in_K[1], x_in_K[2]],
+                [0.0, x_in_K[3], x_in_K[4]],
+                [0.0, 0.0, 1.0],
+            ], dtype=np.float64)
+            rest = x[n_params_in_K:]  # 剩余的参数
+            len_rest = rest.shape[0]
+            assert len_rest % 2 == 0, f'剩余参数个数应该是偶数! {len_rest=}'
+            assert len_rest == (len_rest_expected := 2 * n_views * 3), \
+                f'实际剩余参数个数 ({len_rest}) 与预期 ({len_rest_expected}) 不同!'
+            len_half_rest = len_rest // 2
+            rvecs = rest[:len_half_rest]
+            tvecs = rest[len_half_rest:]
+            rvecs = rvecs.reshape((n_views, 3))
+            tvecs = tvecs.reshape((n_views, 3))
             return K, rvecs, tvecs
+
+        n_views = len(list_of_pixel_2d_homo)  # 视图个数（即不同姿态的相机拍摄的“照片”的张数）
+        n_iter = 0  # LM算法迭代次数
 
         def residuals_joint(x: np.ndarray) -> np.ndarray:
             """
-            x: packed params
-            returns: concatenated residuals (2 * M * V)
+            输入相机内参和外参，输出重投影误差向量（像素点预测值与观测值的差）
             """
-            n_views = len(list_of_pixel_2d_homo)
             K, rvecs, tvecs = unpack_params(x, n_views)
             K = K.astype(np.float64)
+            K /= K[2, 2]  # 相机内参矩阵归一化
             residuals = []
 
-            for rv, tv, img_h in zip(rvecs, tvecs, list_of_pixel_2d_homo):
-                R = rodrigues(rv)  # rv shape (3,)
-                # model points on plane z=0 in world coords are model_2d_homo (X,Y,1)
-                # camera coords: Xc = R[:, :2] * [X,Y] + t  <-- because model z=1 entry corresponds to affine
-                # but safer: treat model as (X,Y,0) in 3D and do full R @ [X,Y,0] + t
-                M = model_2d_homo[:, :2]  # (M,2)
-                # Compose 3D points with z=0
-                X3 = np.hstack([M, np.zeros((M.shape[0], 1), dtype=np.float64)])  # (M,3)
-                Xc = (R @ X3.T).T + np.asarray(tv).reshape(1,3)  # (M,3)
+            assert model_2d_homo.ndim == 2 and model_2d_homo.shape[1] == 3, \
+                f'{model_2d_homo.ndim=}, {model_2d_homo.shape=}'
+            assert rvecs.shape[0] == tvecs.shape[0] == len(list_of_pixel_2d_homo), \
+                f'{rvecs.shape=}, {tvecs.shape=}, {len(list_of_pixel_2d_homo)=}'
 
-                # project
-                p_h = (K @ Xc.T).T  # (M,3)
-                denom = p_h[:, 2:3]
-                denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
-                uv_pred = p_h[:, :2] / denom
-
-                denom_obs = img_h[:, 2:3]
-                denom_obs = np.where(np.abs(denom_obs) < 1e-12, np.sign(denom_obs) * 1e-12, denom_obs)
-                uv_obs = img_h[:, :2] / denom_obs
-
-                diff = (uv_obs - uv_pred).reshape(-1)
+            for rv, tv, pixel_2d_homo in zip(rvecs, tvecs, list_of_pixel_2d_homo):
+                tv = tv.reshape(3, 1)
+                R = rodrigues(rv)  # 利用旋转参数 rv 构造旋转矩阵 R。
+                H = CameraModel.make_homography(K, R, tv)  # 利用相机内参矩阵 K、旋转矩阵 R 和平移向量 tv 构造单应性 H。
+                assert H.shape == (3, 3), f'{H.shape=}'
+                reprojection_points_homo = model_2d_homo @ H.T  # 重投影，产出像素点的齐次坐标
+                reprojection_points_nonhomo = homo2nonhomo(reprojection_points_homo)
+                pixel_2d_nonhomo = homo2nonhomo(pixel_2d_homo)
+                diff = (reprojection_points_nonhomo - pixel_2d_nonhomo).reshape(-1)
                 residuals.append(diff)
 
-            return np.concatenate(residuals).astype(np.float64)
+            # KK-TEST
+            nonlocal n_iter
+            if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
+                path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
+                CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
+            n_iter += 1
+
+            return np.concatenate(residuals, dtype=np.float64)
+
+        def homography_reprojection_rmse(x: np.ndarray) -> float:
+            err_vec = residuals_joint(x)
+            err_rmse = np.sqrt(np.mean(err_vec ** 2))
+            assert np.isscalar(err_rmse), f'{err_rmse=}'
+            return err_rmse
 
         x0 = pack_params(K, rvecs_init, tvecs_init)
+
+        logger.debug(f'优化之前的重投影误差：\n\t{homography_reprojection_rmse(x0):.6e}')
+
+        optimize_result: scipy.optimize.OptimizeResult
         optimize_result = scipy.optimize.least_squares(
             residuals_joint,
             x0=x0,
             method='lm',  # Levenberg-Marquardt algorithm
-            xtol=1e-8,
-            ftol=1e-8,
-            gtol=1e-8,
-            max_nfev=5000,
+            xtol=1e-4,
+            ftol=1e-4,
+            gtol=1e-4,
+            max_nfev=5000,  # 最多迭代 5000 * n 次
             verbose=2,
         )
 
         # print(f'{optimize_result=}')
+        x_opt: np.ndarray
         x_opt = optimize_result.x
-        K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, len(list_of_pixel_2d_homo))
+        K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, n_views)
+        K_opt /= K_opt[2, 2]  # 相机内参矩阵归一化
 
+        logger.debug(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt):.6e}')
+
+        ## KK-TEST
+        # for idx in range(len(list_of_pixel_2d_homo)):
+        #     CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K_opt, rvecs_opt, tvecs_opt, idx)
+
+        K_opt /= K_opt[2, 2]
         return K_opt
 
 
@@ -886,94 +1002,109 @@ def load_mat(path: str) -> typing.Dict[str, np.ndarray]:
     return scipy.io.loadmat(path)
 
 
-def infer_image_size(list_of_image_points, margin=2, min_size=(480, 640)):
-    """
-    输入:
-      list_of_image_points: 可以是
-         - numpy.ndarray with shape (V, M, 3)  (your zhang.mat: 1000x256x3)
-         - list of arrays each shape (M, 3)
-         - single array shape (M,3)
-      margin: 整数，结果上再加的像素余量
-      min_size: (min_height, min_width) 最小尺寸下限
-    返回:
-      (height, width) 两个整数
-    """
-    pts = list_of_image_points
-
-    # 转为 numpy 数组（若是 list，尝试 stack）
-    if isinstance(pts, list):
-        pts = np.stack([np.asarray(p) for p in pts], axis=0)   # -> (V, M, 3)
-    else:
-        pts = np.asarray(pts)
-
-    # 可能的形状：
-    # (V, M, 3)  <-- 1000 x 256 x 3
-    # (M, 3, V)  etc. 处理常见变体
-    if pts.ndim == 3 and pts.shape[2] == 3:
-        arr = pts  # (V, M, 3)
-    elif pts.ndim == 3 and pts.shape[1] == 3:
-        # 例如 (V, 3, M) or (something,3,M) -> 转置为 (V, M, 3)
-        arr = pts.transpose(0, 2, 1)
-    elif pts.ndim == 2 and pts.shape[1] == 3:
-        # 单幅图像 (M,3) -> 加一个视图维度
-        arr = pts[np.newaxis, ...]
-    else:
-        raise ValueError(f'unrecognized shape for list_of_image_points: {pts.shape}')
-
-    # 把齐次坐标除以第三个分量得到非齐次 u,v
-    # 防止除以0 (理论上第三分量都是1)，用 eps 保护
-    denom = arr[..., 2:3]
-    # 使用更安全的除法，防止除以接近0的值
-    denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
-    uv = arr[..., :2] / denom   # shape (V, M, 2)
-
-    # 检查uv中是否包含无穷大或NaN值
-    if np.any(np.isinf(uv)) or np.any(np.isnan(uv)):
-        logger.warning('计算得到的uv坐标包含无穷大或NaN值，将使用默认尺寸')
-        return min_size[0], min_size[1]
-
-    # 取所有视图与所有点的最大 u (x) 和 v (y)
-    max_u = np.nanmax(uv[..., 0])
-    max_v = np.nanmax(uv[..., 1])
-
-    # 检查最大值是否为无穷大
-    if np.isinf(max_u) or np.isinf(max_v):
-        logger.warning('最大坐标值为无穷大，将使用默认尺寸')
-        return min_size[0], min_size[1]
-
-    width  = int(np.ceil(max_u)) + int(margin)
-    height = int(np.ceil(max_v)) + int(margin)
-
-    # 应用最小尺寸下限
-    height = max(height, int(min_size[0]))
-    width  = max(width,  int(min_size[1]))
-
-    return (height, width)
-
-
 def init():
+    camera_theta = np.radians(90)
     projection_model = CameraModel(
-        d=100,
-        a=400,
-        b=300,
-        theta=np.radians(90.5),  # 将角度制的 90.5° 转为弧度制
-        u0=320,
-        v0=240,
+        d=22500.0,
+        a=18,
+        b=25,
+        theta=camera_theta,  # 将角度制的 90.5° 转为弧度制
+        u0=255,
+        v0=255,
     )
     model_points = generate_model_points()
-    n_photos = 20
 
     list_of_image_points = []
     list_of_rotation = []
     list_of_translation = []
 
-    for _ in range(n_photos):
-        _, image_points, rotation, translation, _ = projection_model.randomly_project(model_points)
+    for angle_x in range(-60, 61, 15):
+        logger.debug(f'Rotation({angle_x}, 0, 0)')
+        rotation = Rotation(angle_x, 0.0, 0.0).R
+        translation = Translation.randomize().T
+        _, image_points, _, _, _ = projection_model._arbitrary_project(model_points, rotation, translation, noise=None)
         list_of_image_points.append(image_points)
-        list_of_rotation.append(rotation)
-        list_of_translation.append(translation)
 
-    image_size = infer_image_size(list_of_image_points)
+    for angle_y in itertools.chain.from_iterable([
+        range(-105, 0, 30),
+        range(15, 110, 30),
+    ]):
+        logger.debug(f'Rotation(0, {angle_y * 0.5}, 0)')
+        rotation = Rotation(0.0, angle_y * 0.5, 0.0).R
+        translation = Translation.randomize().T
+        _, image_points, _, _, _ = projection_model._arbitrary_project(model_points, rotation, translation, noise=None)
+        list_of_image_points.append(image_points)
+
+    def infer_image_size(margin: int = 2, min_size: tuple[int, int] = (480, 640)):
+        """
+        输入:
+        list_of_image_points: 可以是
+            - numpy.ndarray with shape (V, M, 3)  (your zhang.mat: 1000x256x3)
+            - list of arrays each shape (M, 3)
+            - single array shape (M,3)
+        margin: 整数，结果上再加的像素余量
+        min_size: (min_height, min_width) 最小尺寸下限
+        返回:
+        (height, width) 两个整数
+        """
+        pts = list_of_image_points
+
+        # 转为 numpy 数组（若是 list，尝试 stack）
+        if isinstance(pts, list):
+            pts = np.stack([np.asarray(p) for p in pts], axis=0)   # -> (V, M, 3)
+        else:
+            pts = np.asarray(pts)
+
+        # 可能的形状：
+        # (V, M, 3)  <-- 1000 x 256 x 3
+        # (M, 3, V)  etc. 处理常见变体
+        if pts.ndim == 3 and pts.shape[2] == 3:
+            arr = pts  # (V, M, 3)
+        elif pts.ndim == 3 and pts.shape[1] == 3:
+            # 例如 (V, 3, M) or (something,3,M) -> 转置为 (V, M, 3)
+            arr = pts.transpose(0, 2, 1)
+        elif pts.ndim == 2 and pts.shape[1] == 3:
+            # 单幅图像 (M,3) -> 加一个视图维度
+            arr = pts[np.newaxis, ...]
+        else:
+            raise ValueError(f'unrecognized shape for list_of_image_points: {pts.shape}')
+
+        # # 检查数据是否包含无穷大或NaN值
+        # if np.any(np.isinf(arr)) or np.any(np.isnan(arr)):
+        #     logger.warning('输入图像点包含无穷大或NaN值，将使用默认尺寸')
+        #     return min_size[0], min_size[1]
+
+        # 把齐次坐标除以第三个分量得到非齐次 u,v
+        # 防止除以0 (理论上第三分量都是1)，用 eps 保护
+        denom = arr[..., 2:3]
+        # 使用更安全的除法，防止除以接近0的值
+        denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
+        uv = arr[..., :2] / denom   # shape (V, M, 2)
+
+        # 检查uv中是否包含无穷大或NaN值
+        if np.any(np.isinf(uv)) or np.any(np.isnan(uv)):
+            logger.warning('计算得到的uv坐标包含无穷大或NaN值，将使用默认尺寸')
+            return min_size[0], min_size[1]
+
+        # 取所有视图与所有点的最大 u (x) 和 v (y)
+        max_u = np.nanmax(uv[..., 0])
+        max_v = np.nanmax(uv[..., 1])
+
+        # 检查最大值是否为无穷大
+        if np.isinf(max_u) or np.isinf(max_v):
+            logger.warning('最大坐标值为无穷大，将使用默认尺寸')
+            return min_size[0], min_size[1]
+
+        width  = int(np.ceil(max_u)) + int(margin)
+        height = int(np.ceil(max_v)) + int(margin)
+
+        # 应用最小尺寸下限
+        height = max(height, int(min_size[0]))
+        width  = max(width,  int(min_size[1]))
+
+        return (height, width)
+
+    image_size = infer_image_size()
 
     save_mat(
         'zhang.mat',
@@ -988,7 +1119,7 @@ def init():
 
 def show_real_homography(list_of_rotation, list_of_translation, real_K):
     real_homography = [
-        real_K @ np.column_stack([rotation[:, 0], rotation[:, 1], translation])
+        CameraModel.make_homography(real_K, rotation, translation)
         for rotation, translation in zip(list_of_rotation, list_of_translation)
     ]
     for homography in real_homography:
@@ -1001,15 +1132,24 @@ def show_real_homography(list_of_rotation, list_of_translation, real_K):
 def evaluate_relative_error(estimated_intrinsic_matrix, real_intrinsic_matrix):
     tiny = np.finfo(real_intrinsic_matrix.dtype).tiny
     relative_error_norm = np.linalg.norm(estimated_intrinsic_matrix - real_intrinsic_matrix) / (np.linalg.norm(real_intrinsic_matrix) + tiny)
-    logger.info(f'相机内参矩阵相对误差(L2范数) = {relative_error_norm*100:.2f}%')
-    relative_error_elementwise = (estimated_intrinsic_matrix - real_intrinsic_matrix) / (real_intrinsic_matrix + tiny)
+    logger.info(f'相机内参矩阵相对误差 (L2范数) = {relative_error_norm*100:.2f}%')
+    sign = np.sign(real_intrinsic_matrix)
+    signed_tiny = np.where(sign == 0.0, tiny, tiny * sign)
+    relative_error_elementwise = (estimated_intrinsic_matrix - real_intrinsic_matrix) / (real_intrinsic_matrix + signed_tiny)
     relative_error_elementwise[relative_error_elementwise > 1e10] = np.inf
     relative_error_elementwise[relative_error_elementwise < -1e10] = -np.inf
-    logger.debug(f'相机内参矩阵相对误差(逐个元素) =\n{str(np.vectorize(lambda x: f'{x*100:.2f}%')(relative_error_elementwise))}')
+    formatted_array = np.array2string(
+        relative_error_elementwise * 100,
+        formatter={'float_kind': lambda x: f'{x:.2f}%'},
+        precision=2,
+        suppress_small=True,
+        separator=', '
+    )
+    logger.debug(f'相机内参矩阵相对误差 (逐个元素) =\n{formatted_array}')
 
 
 def compare_with_opencv():
-    logger.debug('\n' * 10 + '=' * 100)
+    logger.debug('\n' * 2 + '=' * 100)
     import cv2
     saved_data = load_mat('zhang.mat')
     model_points_h = saved_data['model_2d_homo']             # (M,3) 齐次模型点
@@ -1044,9 +1184,7 @@ def compare_with_opencv():
         pts = np.asarray(pts)
         # 常见情形: (M,3) 齐次坐标
         if pts.ndim == 2 and pts.shape[1] == 3:
-            denom = pts[:, 2:3]
-            denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
-            uv = pts[:, :2] / denom
+            uv = homo2nonhomo(pts)
         # 也可能是 (M,2)
         elif pts.ndim == 2 and pts.shape[1] == 2:
             uv = pts
@@ -1054,9 +1192,7 @@ def compare_with_opencv():
         else:
             pts_flat = pts.reshape(-1, pts.shape[-1])
             if pts_flat.shape[1] == 3:
-                denom = pts_flat[:, 2:3]
-                denom = np.where(np.abs(denom) < 1e-12, np.sign(denom) * 1e-12, denom)
-                uv = pts_flat[:, :2] / denom
+                uv = homo2nonhomo(pts_flat)
             elif pts_flat.shape[1] == 2:
                 uv = pts_flat
             else:
@@ -1136,18 +1272,6 @@ def compare_with_opencv():
     }
 
 
-def min_max(iterable, dtype=np.float32):
-    min_val = dtype('inf')
-    max_val = dtype('-inf')
-    # 在迭代过程中直接更新
-    for value in iterable:
-        if value < min_val:
-            min_val = value
-        if value > max_val:
-            max_val = value
-    return min_val, max_val
-
-
 def print_homography_condition(list_of_homography: list[np.ndarray]):
     min_cond_homography, max_cond_homography = min_max(
         np.linalg.cond(homography)
@@ -1156,7 +1280,7 @@ def print_homography_condition(list_of_homography: list[np.ndarray]):
     logger.debug(f'经过归一化以后的单应性的条件数，最小值 = {min_cond_homography:.6e}，最大值 = {max_cond_homography:.6e}')
 
 
-def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.ndarray):
+def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.ndarray) -> list[int]:
     """
     返回被判定为 quasi-affine 的视图索引列表（indices），以及按这些索引筛选后的 homographies。
     这样可以确保后续用到的图像点集合与单应性列表一一对应。
@@ -1171,6 +1295,7 @@ def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.n
         seq = model_points @ h_inv_r3.T
         seq = np.sign(seq)
         rate = abs(seq.sum()) / len(seq)
+        # logger.debug(f'单应性拟仿射性 = {rate}')
         if rate > .95:
             kept_idx.append(idx)
     remain_ratio = len(kept_idx) / max(1, len(list_of_homography))
@@ -1183,8 +1308,9 @@ def run():
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
 
-    for index_image_points in range(len(list_of_image_points)):
-        CameraModel.visualize_projection(model_points, list_of_image_points, index_image_points)
+    ## KK-TEST
+    # for idx in range(len(list_of_image_points)):
+    #     CameraModel.visualize_projection(model_points, list_of_image_points, idx)
 
     realK = saved_data['real_intrinsic_matrix']
     logger.debug(f'可用校正图像数量: {len(list_of_image_points)}')
@@ -1192,11 +1318,10 @@ def run():
         list_of_homography = []
         # 为各个不同视图分别计算单应性
         for image_points in list_of_image_points:
-            list_of_homography.append(
-                ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(
-                    model_points, image_points
-                )
+            homography = ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling(
+                model_points, image_points
             )
+            list_of_homography.append(homography)
         # 利用单应性的 quasi-affine 假设，进行筛选
         kept_idx = assert_quasi_affine(list_of_homography, model_points)
         # kept_idx = kept_idx[:10]
@@ -1220,17 +1345,39 @@ def run():
 
 
 if __name__ == '__main__':
-    # init()  # 生成模型点和像素点
+    init()  # 生成模型点和像素点
 
-    # 用我自己实现的算法，求解相机内参矩阵
+    def delete_all_pngs():
+        # 获取当前目录对象
+        current_dir = pathlib.Path('.')
+
+        # 查找所有 .png 文件 (不区分大小写)
+        png_files = list(current_dir.glob('*.[pP][nN][gG]'))
+
+        if not png_files:
+            logger.debug('当前目录下没有找到 PNG 文件。')
+            return
+
+        for file_path in png_files:
+            try:
+                file_path.unlink()  # 执行删除
+            except Exception as e:
+                logger.debug(f'删除失败 {file_path.name}: {e}')
+
+    delete_all_pngs()
+
+    logger.debug('\n' * 2 + '=' * 100)
+
+    run()
+
+    logger.debug('\n' * 2 + '=' * 100)
     saved_data = load_mat('zhang.mat')
+    image_size = saved_data['image_size']
+    logger.debug(f'图像尺寸 ={image_size}')
     realK = saved_data['real_intrinsic_matrix']
     realKinv = np.linalg.inv(realK)
     logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
-    logger.debug(f'真实的基本矩阵 =\n{realKinv.T @ realKinv}')
-
-    logger.debug('\n' * 10 + '=' * 100)
-    run()
+    logger.debug(f'真实的基本矩阵 B=\n{realKinv.T @ realKinv}')
 
     # 使用 opencv 现有的算法，求解相机内参矩阵
     compare_with_opencv()
