@@ -357,7 +357,9 @@ class Translation:
 
     @classmethod
     def randomize(cls):
-        Tz = np.random.uniform(30000, 50000)
+        range_zmin = 30000
+        range_zmax = 50000
+        Tz = np.random.uniform(range_zmin, range_zmax)
         range_x = Tz * 0.2
         range_y = Tz * 0.2
         Tx = np.random.uniform(-range_x, range_x)
@@ -393,6 +395,12 @@ class CameraModel:
             [0, beta, v0],
             [0, 0, 1],
         ], dtype=np.float64)
+        self.d = d
+        self.a = a
+        self.b = b
+        self.theta = theta
+        self.u0 = u0
+        self.v0 = v0
 
     @staticmethod
     def make_homography(intrinsic_matrix: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
@@ -1032,6 +1040,8 @@ def init():
         logger.debug(f'Rotation(0, {angle_y * 0.5}, 0)')
         rotation = Rotation(0.0, angle_y * 0.5, 0.0).R
         translation = Translation.randomize().T
+        assert translation[2, 0] > projection_model.d, \
+            f'标定板到光心的距离 ({translation[2, 0]}) 应该大于光心到像平面的距离 ({projection_model.d}) !'
         _, image_points, _, _, _ = projection_model._arbitrary_project(model_points, rotation, translation, noise=None)
         list_of_image_points.append(image_points)
 
