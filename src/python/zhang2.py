@@ -758,7 +758,7 @@ class ZhangCameraCalibration:
     def extract_intrinsic_parameters_from_homography(cls, list_of_homography: typing.List[np.ndarray],
                                                      model_2d_homo: np.ndarray,
                                                      list_of_pixel_2d_homo: typing.List[np.ndarray],
-                                                     realK: np.ndarray = None):
+                                                     realK: np.ndarray = None, visual: bool = False):
         """
         把相机内部参数逐个提取出来
         """
@@ -1003,12 +1003,12 @@ class ZhangCameraCalibration:
                 diff = (reprojection_points_nonhomo - pixel_2d_nonhomo).reshape(-1)
                 residuals.append(diff)
 
-            # KK-TEST
-            # nonlocal n_iter
-            # if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
-            #     path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
-            #     CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
-            # n_iter += 1
+            if visual:
+                nonlocal n_iter
+                if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
+                    path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
+                    CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
+                n_iter += 1
 
             return np.concatenate(residuals, dtype=np.float64)
 
@@ -1204,7 +1204,6 @@ def show_real_homography(list_of_rotation, list_of_translation, real_K):
 
 
 def compare_with_opencv():
-    logger.debug('\n' * 2 + '=' * 100)
     import cv2
     saved_data = load_mat('zhang.mat')
     model_points_h = saved_data['model_2d_homo']             # (M,3) 齐次模型点
@@ -1267,9 +1266,9 @@ def compare_with_opencv():
 
     # 调用 OpenCV calibrateCamera
     # 可选 flags，根据需要你可以固定某些畸变项；这里不做特别固定，用默认让算法估计
-    flags = 0
+    # flags = 0
     # 如果你只想估计内参而不估计高阶径向畸变，可以使用：
-    # flags = cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5
+    flags = cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 | cv2.CALIB_FIX_K6
 
     # 使用初始内参为 None，让 calibrateCamera 自行初始化
     with Timer():
@@ -1358,14 +1357,13 @@ def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.n
     return kept_idx
 
 
-def run():
+def run(visual: bool = False):
     saved_data = load_mat('zhang.mat')
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
 
-    ## KK-TEST
-    # for idx in range(len(list_of_image_points)):
-    #     CameraModel.visualize_projection(model_points, list_of_image_points, idx)
+    for idx in range(len(list_of_image_points)):
+        CameraModel.visualize_projection(model_points, list_of_image_points, idx)
 
     realK = saved_data['real_intrinsic_matrix']
     logger.debug(f'可用校正图像数量: {len(list_of_image_points)}')
@@ -1394,9 +1392,10 @@ def run():
         K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(
             list_of_homography_filtered, model_points, list_of_image_points_filtered,
             realK=realK,
+            visual=visual,
         )
     logger.debug(f'估计的相机内参矩阵 K=\n{K}')
-    evaluate_relative_error(K, realK)
+    evaluate_relative_error(K, realK, record_error=True)
 
 
 if __name__ == '__main__':
@@ -1419,13 +1418,6 @@ if __name__ == '__main__':
 
     delete_all_pngs()
 
-    init()  # 生成模型点和像素点
-
-    logger.debug('\n' * 2 + '=' * 100)
-
-    run()
-
-    logger.debug('\n' * 2 + '=' * 100)
     saved_data = load_mat('zhang.mat')
     image_size = saved_data['image_size']
     logger.debug(f'图像尺寸 ={image_size}')
@@ -1434,5 +1426,21 @@ if __name__ == '__main__':
     logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
     logger.debug(f'真实的基本矩阵 B=\n{realKinv.T @ realKinv}')
 
-    # 使用 opencv 现有的算法，求解相机内参矩阵
-    compare_with_opencv()
+    for noise_idx, noise_level in enumerate(ErrorVsNoise.noise_range):
+
+        logger.debug('\n' * 2 + '=' * 100)
+
+        logger.debug(f'当前噪声水平: {noise_level:.01f}')
+
+        init(noise=noise_level)  # 生成模型点和像素点
+
+        logger.debug('\n' * 2 + '-' * 100)
+
+        run(visual=noise_idx==len(ErrorVsNoise.noise_range) - 1)
+
+        logger.debug('\n' * 2 + '-' * 100)
+
+        # 使用 opencv 现有的算法，求解相机内参矩阵
+        compare_with_opencv()
+
+    ErrorVsNoise.plot()
