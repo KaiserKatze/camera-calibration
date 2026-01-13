@@ -7,6 +7,7 @@ import functools
 import typing
 import time
 import os
+from collections.abc import Callable
 
 import numpy as np
 import scipy.optimize
@@ -425,7 +426,8 @@ class CameraModel:
     def _arbitrary_project(self, model_2d_homo: np.ndarray,
                            rotation: np.ndarray,
                            translation: np.ndarray,
-                           noise: float = None):
+                           noise: float = None,
+                           distort_fn: Callable[[np.ndarray], np.ndarray] = None):
         """
         将世界坐标系中的模型点投影到像素坐标系，输入模型点的齐次坐标，返回像素点的齐次坐标
 
@@ -467,11 +469,14 @@ class CameraModel:
         # 计算像素点的非齐次坐标
         pixel_2d_nonhomo = homo2nonhomo(pixel_2d_homo)
 
-        if noise is not None:  # 添加高斯噪声
+        if noise is not None and noise > 0.0:  # 添加高斯噪声
             # 给像素点的非齐次坐标添加高斯噪声（均值=0，标准差=0.5 像素）
             logger.debug('正在添加高斯噪声 ...')
             noise_array = np.random.normal(0, noise, pixel_2d_nonhomo.shape)
             pixel_2d_nonhomo += noise_array
+
+        if distort_fn is not None:  # 添加畸变
+            pixel_2d_nonhomo = distort_fn(pixel_2d_nonhomo)
 
         # 重新组装像素点的齐次坐标
         pixel_2d_homo = np.hstack(
@@ -482,7 +487,7 @@ class CameraModel:
         assert pixel_2d_homo.shape == model_2d_homo.shape, \
             f'{pixel_2d_homo.shape=}, {model_2d_homo.shape=}'
 
-        return model_2d_homo, pixel_2d_homo, rotation, translation, H
+        return pixel_2d_homo
 
     def randomly_project(self, model_2d_homo: np.ndarray, noise=None):
         # 随机生成旋转矩阵和位移向量
@@ -564,6 +569,26 @@ class CameraModel:
         logger.debug(f'saving figure to: {os.path.abspath(path_fig)!r}')
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
         plt.close()
+
+    @staticmethod
+    def distort_simple_Brown_Conrady(pixel_2d_nonhomo: np.ndarray, k1: float, k2: float) -> np.ndarray:
+        """
+        使用简化的 Brown-Conrady 畸变模型（只有2个径向畸变系数，没有切向畸变系数）
+
+        :param pixel_2d_nonhomo: 理想的（无畸变的）像素点坐标
+        :type pixel_2d_nonhomo: np.ndarray
+        :return: 带有畸变的像素点坐标
+        :rtype: ndarray[_AnyShape, dtype[Any]]
+        """
+
+        if not (pixel_2d_nonhomo.ndim == 2 and pixel_2d_nonhomo.shape[1] == 2):
+            raise ValueError(f'参数 pixel_2d_nonhomo 的形状 {pixel_2d_nonhomo.shape} 不符合预期!')
+        radius2 = np.sum(pixel_2d_nonhomo ** 2, axis=1)
+        assert radius2.shape == (pixel_2d_nonhomo.shape[0],), f'{radius2.shape=}'
+        coff = (k1 * radius2 + k2 * radius2 ** 2)
+        corr = (pixel_2d_nonhomo.T * [coff, coff]).T
+        assert corr.shape == pixel_2d_nonhomo.shape,  f'修正项 corr 的形状 {corr.shape} 不符合预期!'
+        return pixel_2d_nonhomo + corr
 
 
 class ZhangCameraCalibration:
@@ -940,11 +965,11 @@ class ZhangCameraCalibration:
                 residuals.append(diff)
 
             # KK-TEST
-            nonlocal n_iter
-            if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
-                path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
-                CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
-            n_iter += 1
+            # nonlocal n_iter
+            # if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
+            #     path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
+            #     CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
+            # n_iter += 1
 
             return np.concatenate(residuals, dtype=np.float64)
 
@@ -1010,7 +1035,7 @@ def load_mat(path: str) -> typing.Dict[str, np.ndarray]:
     return scipy.io.loadmat(path)
 
 
-def init():
+def init(noise = None, distort_fn = None):
     camera_theta = np.radians(90)
     projection_model = CameraModel(
         d=22500.0,
@@ -1030,7 +1055,7 @@ def init():
         logger.debug(f'Rotation({angle_x}, 0, 0)')
         rotation = Rotation(angle_x, 0.0, 0.0).R
         translation = Translation.randomize().T
-        _, image_points, _, _, _ = projection_model._arbitrary_project(model_points, rotation, translation, noise=None)
+        image_points = projection_model._arbitrary_project(model_points, rotation, translation, noise=noise, distort_fn=distort_fn)
         list_of_image_points.append(image_points)
 
     for angle_y in itertools.chain.from_iterable([
@@ -1042,7 +1067,7 @@ def init():
         translation = Translation.randomize().T
         assert translation[2, 0] > projection_model.d, \
             f'标定板到光心的距离 ({translation[2, 0]}) 应该大于光心到像平面的距离 ({projection_model.d}) !'
-        _, image_points, _, _, _ = projection_model._arbitrary_project(model_points, rotation, translation, noise=None)
+        image_points = projection_model._arbitrary_project(model_points, rotation, translation, noise=noise, distort_fn=distort_fn)
         list_of_image_points.append(image_points)
 
     def infer_image_size(margin: int = 2, min_size: tuple[int, int] = (480, 640)):
@@ -1355,8 +1380,6 @@ def run():
 
 
 if __name__ == '__main__':
-    init()  # 生成模型点和像素点
-
     def delete_all_pngs():
         # 获取当前目录对象
         current_dir = pathlib.Path('.')
@@ -1375,6 +1398,8 @@ if __name__ == '__main__':
                 logger.debug(f'删除失败 {file_path.name}: {e}')
 
     delete_all_pngs()
+
+    init()  # 生成模型点和像素点
 
     logger.debug('\n' * 2 + '=' * 100)
 
