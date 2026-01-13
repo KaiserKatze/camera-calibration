@@ -74,6 +74,28 @@ class Timer:
         logger.debug(f'计算耗时: {self.elapsed_time:.3f} 秒')
 
 
+class ErrorVsNoise:
+    noise_range = np.arange(0.0, 1.6, 0.1)
+    rel_err_alpha = []
+    rel_err_beta = []
+    abs_err_u0 = []
+    abs_err_v0 = []
+
+    @classmethod
+    def plot(cls):
+        plt.figure()
+        plt.xlabel('噪声水平')
+        plt.ylabel('相对误差 (%)')
+        plt.plot(cls.noise_range, cls.rel_err_alpha, color='b', linestyle='solid', label='alpha')
+        plt.plot(cls.noise_range, cls.rel_err_beta, color='r', linestyle='dashed', label='beta')
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        plt.tight_layout()
+        plt.title(f'误差与高斯噪声的关系')
+        path_fig = f'fig-error-vs-gauss-noise.png'
+        logger.debug(f'saving figure to: {os.path.abspath(path_fig)!r}')
+        plt.savefig(path_fig, dpi=150, bbox_inches='tight')
+        plt.close()
+
 
 def skew(v: np.ndarray) -> np.ndarray:
     """返回向量 v=(x,y,z) 的反对称矩阵 [v]_x"""
@@ -212,6 +234,32 @@ def normalize_points(points):
     # 返回非齐次坐标 (N, 2) 和 变换矩阵 T
     return normalized_points_homo[:, :2], T
 
+
+def evaluate_relative_error(estimated_intrinsic_matrix, real_intrinsic_matrix, record_error: bool = False):
+    tiny = np.finfo(real_intrinsic_matrix.dtype).tiny
+    relative_error_norm = np.linalg.norm(estimated_intrinsic_matrix - real_intrinsic_matrix) / (np.linalg.norm(real_intrinsic_matrix) + tiny)
+    logger.info(f'相机内参矩阵相对误差 (L2范数) = {relative_error_norm*100:.2f}%')
+    sign = np.sign(real_intrinsic_matrix)
+    signed_tiny = np.where(sign == 0.0, tiny, tiny * sign)
+    absolute_error_elementwise = estimated_intrinsic_matrix - real_intrinsic_matrix
+    relative_error_elementwise = absolute_error_elementwise / (real_intrinsic_matrix + signed_tiny)
+
+    if record_error:
+        ErrorVsNoise.abs_err_u0.append(absolute_error_elementwise[0, 2])
+        ErrorVsNoise.abs_err_v0.append(absolute_error_elementwise[1, 2])
+        ErrorVsNoise.rel_err_alpha.append(100 * relative_error_elementwise[0, 0])
+        ErrorVsNoise.rel_err_beta.append(100 * relative_error_elementwise[1, 1])
+
+    relative_error_elementwise[relative_error_elementwise > 1e10] = np.inf
+    relative_error_elementwise[relative_error_elementwise < -1e10] = -np.inf
+    formatted_array = np.array2string(
+        relative_error_elementwise * 100,
+        formatter={'float_kind': lambda x: f'{x:.2f}%'},
+        precision=2,
+        suppress_small=True,
+        separator=', '
+    )
+    logger.debug(f'相机内参矩阵相对误差 (逐个元素) =\n{formatted_array}')
 
 
 def generate_model_points():
@@ -592,15 +640,6 @@ class CameraModel:
 
 
 class ZhangCameraCalibration:
-    @classmethod
-    def evaluate_relative_error(cls, estimated_homography: np.ndarray, ground_truth_homography: np.ndarray):
-        normalized_ground_truth_homography = ground_truth_homography / ground_truth_homography[2,2]
-        normalized_estimated_homography = estimated_homography / estimated_homography[2,2]
-        relative_error = np.linalg.norm(normalized_ground_truth_homography - normalized_estimated_homography)
-        relative_error /= np.linalg.norm(normalized_ground_truth_homography)
-        logger.debug(f'单应性相对误差 ={relative_error*100:.6f}%')
-        return relative_error
-
     @classmethod
     def infer_homography_without_radial_distortion(cls, model: np.ndarray, pixel: np.ndarray):
         # 这里构造的矩阵 L 与张正友的报告中的相同
@@ -1162,25 +1201,6 @@ def show_real_homography(list_of_rotation, list_of_translation, real_K):
         print(f'正在检查单应性 =\n {h_norm}')
         h_cond = np.linalg.cond(h_norm)
         print(f'真实单应性条件数 = {h_cond}')
-
-
-def evaluate_relative_error(estimated_intrinsic_matrix, real_intrinsic_matrix):
-    tiny = np.finfo(real_intrinsic_matrix.dtype).tiny
-    relative_error_norm = np.linalg.norm(estimated_intrinsic_matrix - real_intrinsic_matrix) / (np.linalg.norm(real_intrinsic_matrix) + tiny)
-    logger.info(f'相机内参矩阵相对误差 (L2范数) = {relative_error_norm*100:.2f}%')
-    sign = np.sign(real_intrinsic_matrix)
-    signed_tiny = np.where(sign == 0.0, tiny, tiny * sign)
-    relative_error_elementwise = (estimated_intrinsic_matrix - real_intrinsic_matrix) / (real_intrinsic_matrix + signed_tiny)
-    relative_error_elementwise[relative_error_elementwise > 1e10] = np.inf
-    relative_error_elementwise[relative_error_elementwise < -1e10] = -np.inf
-    formatted_array = np.array2string(
-        relative_error_elementwise * 100,
-        formatter={'float_kind': lambda x: f'{x:.2f}%'},
-        precision=2,
-        suppress_small=True,
-        separator=', '
-    )
-    logger.debug(f'相机内参矩阵相对误差 (逐个元素) =\n{formatted_array}')
 
 
 def compare_with_opencv():
