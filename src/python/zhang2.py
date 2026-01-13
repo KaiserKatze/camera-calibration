@@ -271,9 +271,10 @@ def generate_model_points():
         points_2d_homo: 模型点齐次坐标，形状为 (N, 3)。
     """
 
-    ni = 3  # 网格列数
-    nj = 3  # 网格行数
-    a = 25  # 每个黑色正方形的边长（像素）
+    ni = 10  # 网格列数
+    nj = 14  # 网格行数
+    a = 1000  # 每个黑色正方形的边长（像素）
+    # 标定板上点与点之间的间距很重要，如果太小会导致重投影误差过大
 
     points_2d = []
     for i in range(ni):
@@ -550,7 +551,7 @@ class CameraModel:
 
     @staticmethod
     def visualize_projection(objpoints: np.ndarray, imgpoints: list[np.ndarray],
-                             view_index: int = 0, path_fig: str = None):
+                             view_index: int = 0, title_fig: str = None, path_fig: str = None):
         """
         可视化第 view_index 个视图的模型点与投影点
         """
@@ -562,21 +563,80 @@ class CameraModel:
         img_obs = imgpoints.reshape(-1, 2)
         assert img_obs.shape[0] == obj_obs.shape[0]
 
-        plt.figure()
-        plt.scatter(img_obs[:, 0], img_obs[:, 1], c='r', marker='o', label='像素点')
-        plt.scatter(obj_obs[:, 0], obj_obs[:, 1], c='b', marker='x', label='模型点')
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # ==========================================
+        # 左侧：原始投影关系
+        # ==========================================
+        ax_left = axes[0]
+
+        ax_left.scatter(img_obs[:, 0], img_obs[:, 1], c='r', marker='o', label='像素点', s=5)
+        ax_left.scatter(obj_obs[:, 0], obj_obs[:, 1], c='b', marker='x', label='模型点', s=5)
+
         for i in range(img_obs.shape[0]):
-            plt.plot(
+            ax_left.plot(
                 [img_obs[i, 0], obj_obs[i, 0]],
                 [img_obs[i, 1], obj_obs[i, 1]],
                 'g-', linewidth=0.5,
             )
-        plt.gca().invert_yaxis()  # 图像坐标通常原点在左上
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+
+        ax_left.invert_yaxis()  # 图像坐标通常原点在左上
+        ax_left.set_title('原始尺寸')
+        ax_left.grid(True, alpha=0.3)
+
+        # ==========================================
+        # 右侧：中心化并缩放后的对比
+        # ==========================================
+        ax_right = axes[1]
+
+        # 1. 计算像素点几何中心并平移到原点
+        img_center = np.mean(img_obs, axis=0)
+        img_centered = img_obs - img_center
+
+        # 2. 计算最大距离用于确定缩放系数
+        # 计算平移后的像素点到原点的最大距离
+        dist_img = np.max(np.linalg.norm(img_centered, axis=1))
+        # 计算模型点到原点的最大距离
+        dist_obj = np.max(np.linalg.norm(obj_obs, axis=1))
+
+        # 防止除以零
+        if dist_img == 0:
+            scale = 1.0
+        else:
+            scale = dist_obj / dist_img
+
+        # 3. 缩放像素点
+        img_scaled = img_centered * scale
+
+        # 4. 绘图
+        # 在图例中说明缩放系数
+        label_img = f'像素点'
+
+        ax_right.scatter(img_scaled[:, 0], img_scaled[:, 1], c='r', marker='o', label=label_img, s=5)
+        ax_right.scatter(obj_obs[:, 0], obj_obs[:, 1], c='b', marker='x', label='模型点', s=5)
+
+        for i in range(img_scaled.shape[0]):
+            ax_right.plot(
+                [img_scaled[i, 0], obj_obs[i, 0]],
+                [img_scaled[i, 1], obj_obs[i, 1]],
+                'g-', linewidth=0.5,
+            )
+
+        ax_right.invert_yaxis()
+        # 将图例放在图外或者合适的位置，避免遮挡
+        ax_right.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
+        ax_right.set_title(f'对齐尺度 (缩放比率={scale:.2e})')
+        ax_right.grid(True, alpha=0.3)
+
+        if title_fig is None:
+            title_fig = f'第 {view_index} 个机位下 模型点-像素点 映射关系'
+
+        plt.suptitle(title_fig, y=0.98)
         plt.tight_layout()
-        plt.title(f"第 {view_index} 个机位下 模型点-像素点 映射关系")
+
         if path_fig is None:
             path_fig = f'fig-{view_index}-projection.png'
+
         logger.debug(f'saving figure to: {os.path.abspath(path_fig)!r}')
         plt.savefig(path_fig, dpi=150, bbox_inches='tight')
         plt.close()
@@ -585,7 +645,7 @@ class CameraModel:
     def visualize_reprojection(objpoints: np.ndarray, imgpoints: list[np.ndarray],
                                estimated_intrinsic_matrix: np.ndarray,
                                rvecs: list[np.ndarray], tvecs: list[np.ndarray],
-                               view_index: int = 0, path_fig: str = None):
+                               view_index: int = 0, title_fig: str = None, path_fig: str = None):
         K = estimated_intrinsic_matrix
         rv = rvecs[view_index]
         tv = tvecs[view_index]
@@ -611,7 +671,9 @@ class CameraModel:
         plt.gca().invert_yaxis()  # 图像坐标通常原点在左上
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.)
         plt.tight_layout()
-        plt.title(f"第 {view_index} 个机位下 重投影 映射关系")
+        if title_fig is None:
+            title_fig = f'第 {view_index} 个机位下 重投影 映射关系'
+        plt.title(title_fig)
         if path_fig is None:
             path_fig = f'fig-{view_index}-reprojection.png'
         logger.debug(f'saving figure to: {os.path.abspath(path_fig)!r}')
@@ -914,8 +976,9 @@ class ZhangCameraCalibration:
             lambda1 = 1.0 / np.linalg.norm(Kinv @ h1)
             lambda2 = 1.0 / np.linalg.norm(Kinv @ h2)
 
-            if abs(lambda1 - lambda2) > 1e-4:
-                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}, δ={abs(lambda1 - lambda2):.8f}')
+            rel_diff_lambda = 2.0 * abs(lambda1 - lambda2) / (lambda1 + lambda2)
+            if rel_diff_lambda > 1e-4:
+                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}, δ={rel_diff_lambda:.8f}')
 
             r1 = lambda1 * (Kinv @ h1)
             r2 = lambda1 * (Kinv @ h2)
@@ -1006,8 +1069,13 @@ class ZhangCameraCalibration:
             if visual:
                 nonlocal n_iter
                 if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
+                    view_index = 0
+                    title_fig = f'第 {view_index} 个机位下 第 {n_iter} 次迭代 重投影 映射关系'
                     path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
-                    CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs, 0, path_fig)
+                    CameraModel.visualize_reprojection(
+                        model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs,
+                        view_index, title_fig, path_fig
+                    )
                 n_iter += 1
 
             return np.concatenate(residuals, dtype=np.float64)
@@ -1041,10 +1109,6 @@ class ZhangCameraCalibration:
         K_opt /= K_opt[2, 2]  # 相机内参矩阵归一化
 
         logger.debug(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt):.6e}')
-
-        ## KK-TEST
-        # for idx in range(len(list_of_pixel_2d_homo)):
-        #     CameraModel.visualize_reprojection(model_2d_homo, list_of_pixel_2d_homo, K_opt, rvecs_opt, tvecs_opt, idx)
 
         K_opt /= K_opt[2, 2]
         return K_opt
@@ -1357,13 +1421,15 @@ def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.n
     return kept_idx
 
 
-def run(visual: bool = False):
+def run(noise_level: float = None, num_run: int = 0, visual: bool = False):
     saved_data = load_mat('zhang.mat')
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
 
     for idx in range(len(list_of_image_points)):
-        CameraModel.visualize_projection(model_points, list_of_image_points, idx)
+        title_fig = f'第 {idx} 个机位下 模型点-像素点 映射关系 (噪声水平: {noise_level:.01f})'
+        path_fig = f'run-{num_run}-fig-{idx}-projection.png'
+        CameraModel.visualize_projection(model_points, list_of_image_points, idx, title_fig, path_fig)
 
     realK = saved_data['real_intrinsic_matrix']
     logger.debug(f'可用校正图像数量: {len(list_of_image_points)}')
@@ -1436,7 +1502,7 @@ if __name__ == '__main__':
 
         logger.debug('\n' * 2 + '-' * 100)
 
-        run(visual=noise_idx==len(ErrorVsNoise.noise_range) - 1)
+        run(noise_level=noise_level, visual=noise_idx==len(ErrorVsNoise.noise_range) - 1)
 
         logger.debug('\n' * 2 + '-' * 100)
 
