@@ -1320,6 +1320,22 @@ def init(noise = None, distort_fn = None):
         v0=255,
     )
     model_points = generate_model_points()
+    # 模型点集合的直径
+    diam_model = np.linalg.vector_norm(model_points[0] - model_points[-1])
+
+    def diam_of_point_set(points: np.ndarray) -> float:
+        from scipy.spatial import ConvexHull
+        from scipy.spatial.distance import cdist
+        if len(points) < 0:
+            return 0.0
+        # 计算凸包
+        hull = ConvexHull(points)
+        # 提取凸包上的顶点
+        hull_points = points[hull.vertices]
+        logger.debug(f'凸包顶点数 {len(hull_points)=}')
+        # 计算凸包顶点两两之间的距离
+        dists = cdist(hull_points, hull_points, metric='euclidean')
+        return np.max(dists)
 
     list_of_image_points = []
     list_of_rotation = []
@@ -1330,6 +1346,10 @@ def init(noise = None, distort_fn = None):
         rotation = Rotation(angle_x, 0.0, 0.0).R
         translation = Translation.randomize().T
         image_points = projection_model._arbitrary_project(model_points, rotation, translation, noise=noise, distort_fn=distort_fn)
+        # 像素点集合的直径
+        diam_image = diam_of_point_set(image_points[:, 0:2])
+        if diam_image > diam_model:
+            logger.error(f'像素点集合直径 ({diam_image:.2e}) 大于模型点集合直径 ({diam_model:.2e}) !')
         list_of_image_points.append(image_points)
 
     for angle_y in itertools.chain.from_iterable([
@@ -1342,6 +1362,10 @@ def init(noise = None, distort_fn = None):
         assert translation[2, 0] > projection_model.d, \
             f'标定板到光心的距离 ({translation[2, 0]}) 应该大于光心到像平面的距离 ({projection_model.d}) !'
         image_points = projection_model._arbitrary_project(model_points, rotation, translation, noise=noise, distort_fn=distort_fn)
+        # 像素点集合的直径
+        diam_image = diam_of_point_set(image_points[:, 0:2])
+        if diam_image > diam_model:
+            logger.error(f'像素点集合直径 ({diam_image:.2e}) 大于模型点集合直径 ({diam_model:.2e}) !')
         list_of_image_points.append(image_points)
 
     def infer_image_size(margin: int = 2, min_size: tuple[int, int] = (480, 640)):
