@@ -986,7 +986,7 @@ class ZhangCameraCalibration:
 
             rel_diff_lambda = 200.0 * abs(lambda1 - lambda2) / (lambda1 + lambda2)
             if rel_diff_lambda > 1e-4:
-                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}, δ={rel_diff_lambda:.2f}%')
+                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}, δ={rel_diff_lambda:.5f}%')
 
             r1 = lambda1 * (Kinv @ h1)
             r2 = lambda1 * (Kinv @ h2)
@@ -1713,7 +1713,12 @@ class Lab:
 
             logger.debug(f'当前噪声水平: {noise_level:.01f}')
 
-            init(noise=noise_level, random_view=False)  # 生成模型点和像素点
+            conform_paper = False  # 是否按照论文的方式构建仿真环境
+
+            init(
+                noise=noise_level,
+                random_view=not conform_paper,
+            )  # 生成模型点和像素点
 
             logger.debug('\n' * 2 + '-' * 100)
 
@@ -1721,7 +1726,7 @@ class Lab:
                 noise_level=noise_level, num_run=noise_idx,
                 calibrator_fn=ZhangCameraCalibration.extract_intrinsic_parameters_from_homography,
                 visual=noise_idx==len(ErrorVsNoise.noise_range) - 1,
-                enable_quasi_affine_filter=False,
+                enable_quasi_affine_filter=not conform_paper,
             )
 
             logger.debug('\n' * 2 + '-' * 100)
@@ -1768,7 +1773,7 @@ if __name__ == '__main__':
             except Exception as e:
                 logger.debug(f'删除失败 {file_path.name}: {e}')
 
-    # delete_all_pngs()
+    delete_all_pngs()
 
     saved_data = load_mat('zhang.mat')
     image_size = saved_data['image_size']
