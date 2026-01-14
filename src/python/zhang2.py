@@ -929,10 +929,10 @@ class ZhangCameraCalibration:
 
         # 检查中间计算值是否有效
         if np.isinf(mid1) or np.isinf(mid2) or np.isnan(mid1) or np.isnan(mid2):
-            logger.warning('中间计算值包含无穷大或NaN值，使用默认内参矩阵')
+            logger.warning('中间计算值包含无穷大或NaN值')
 
         if abs(mid2) < 1e-12:
-            logger.warning('mid2接近0，可能导致数值不稳定，使用默认内参矩阵')
+            logger.warning('mid2接近0，可能导致数值不稳定')
 
         v0 = mid1 / mid2
         logger.debug(f'{v0=:.6e}')
@@ -941,7 +941,7 @@ class ZhangCameraCalibration:
         if alpha0 < 0:
             alpha0 = -alpha0
             rho = -rho
-            logger.debug('估计的 alpha0 为负数，已取其绝对值进行计算！')
+            logger.debug('估计的 alpha0 为负数！')
         logger.debug(f'{rho=:.6e}')
         logger.debug(f'{alpha0=:.6e}')
         alpha = np.sqrt(alpha0)
@@ -1644,7 +1644,7 @@ class Lab:
     def test_distort(cls):
         distort_fn = functools.partial(
             CameraModel.distort_simple_Brown_Conrady,
-            k1=0.1, k2=0.05,
+            k1=1e-4, k2=0.00,
         )
 
         logger.debug('\n' * 2 + '=' * 100)
