@@ -1427,7 +1427,10 @@ def run(noise_level: float = None, num_run: int = 0, visual: bool = False):
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
 
     for idx in range(len(list_of_image_points)):
-        title_fig = f'第 {idx} 个机位下 模型点-像素点 映射关系 (噪声水平: {noise_level:.01f})'
+        if noise_level is None:
+            title_fig = f'第 {idx} 个机位下 模型点-像素点 映射关系'
+        else:
+            title_fig = f'第 {idx} 个机位下 模型点-像素点 映射关系 (噪声水平: {noise_level:.01f})'
         path_fig = f'run-{num_run}-fig-{idx}-projection.png'
         CameraModel.visualize_projection(model_points, list_of_image_points, idx, title_fig, path_fig)
 
