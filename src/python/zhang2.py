@@ -854,22 +854,31 @@ class ZhangCameraCalibration:
 
         assert V.shape == (2 * len(list_of_homography), 6), f'矩阵 V 的形状实际上是: {V.shape}'
 
-        # 检查V矩阵是否包含无穷大或NaN值
-        if np.any(np.isinf(V)) or np.any(np.isnan(V)):
-            logger.warning('矩阵V包含无穷大或NaN值!')
+        # 数据归一化（Preconditioning）：平衡 V 矩阵各列的尺度
+
+        # 计算每一列的范数
+        col_norms = np.linalg.norm(V, axis=0)
+
+        # 将 V 的每一列除以其范数
+        V_normalized = V / col_norms
+
+        # 检查 V 矩阵是否包含无穷大或NaN值
+        if np.any(np.isinf(V_normalized)) or np.any(np.isnan(V_normalized)):
+            logger.warning('矩阵 V 包含无穷大或NaN值!')
 
         # 计算矩阵 V 的条件数
         print_all_conditions_of_matrix(V.T @ V, '(V.T @ V)')
+        print_all_conditions_of_matrix(V_normalized.T @ V_normalized, '(V_norm.T @ V_norm)')
 
-        _, S, Vh = svd(V)
+        _, S, Vh = svd(V_normalized)
 
         abs_singular_value = abs(S)
         min_abs_singular_value, max_abs_singular_value = min_max(abs_singular_value)
 
         logger.debug(
-            f'矩阵 V =\n{V}\n'
-            f'\t形状为 {V.shape=}\n'
-            f'\trank(V)={np.linalg.matrix_rank(V)}\n'
+            f'矩阵 V =\n{V_normalized}\n'
+            f'\t形状为 {V_normalized.shape=}\n'
+            f'\trank(V)={np.linalg.matrix_rank(V_normalized)}\n'
             f'\t奇异值 = \n\t{ ','.join('{:.6e}'.format(x) for x in S.tolist()) }\n'
             f'\t奇异值绝对值最大值 = \t{ max_abs_singular_value :.6e}\n'
             f'\t奇异值绝对值最小值 = \t{ min_abs_singular_value :.6e}\n'
@@ -879,7 +888,14 @@ class ZhangCameraCalibration:
         if min_abs_singular_value < 1e-12:
             logger.warning('矩阵V的最小奇异值接近0，可能导致数值不稳定')
 
-        b = Vh[-1, :]
+        b_normalized = Vh[-1, :]
+
+        # 还原 b 的尺度：b_i = b_normalized_i / col_norm_i
+        #       因为我们求解的是 V * b = 0
+        #       相当于 (V * D^-1) * (D * b) = 0
+        #       令 V' = V * D^-1, y = D * b
+        #       则 V' * y = 0，解出 y 后， b = D^-1 * y
+        b = b_normalized / col_norms
 
         assert b.shape == (6,), f'向量 b 的形状实际上是: {b.shape}'
         B11, B12, B22, B13, B23, B33 = b
