@@ -817,14 +817,19 @@ class ZhangCameraCalibration:
         return matrix_R
 
     @classmethod
-    def extract_intrinsic_parameters_from_homography(cls, list_of_homography: typing.List[np.ndarray],
-                                                     model_2d_homo: np.ndarray,
-                                                     list_of_pixel_2d_homo: typing.List[np.ndarray],
-                                                     realK: np.ndarray = None, visual: bool = False):
+    def make_initial_guess(cls, list_of_homography: typing.List[np.ndarray],
+                           model_2d_homo: np.ndarray,
+                           list_of_pixel_2d_homo: typing.List[np.ndarray]):
         """
-        把相机内部参数逐个提取出来
-        """
+        产生闭式解，作为初始猜测
 
+        :param list_of_homography: 利用 `ZhangCameraCalibration.infer_homography_without_radial_distortion_with_isotropic_scaling` 估计的单应性
+        :type list_of_homography: typing.List[np.ndarray]
+        :param model_2d_homo: 模型点齐次坐标
+        :type model_2d_homo: np.ndarray
+        :param list_of_pixel_2d_homo: 若干视图下的像素点齐次坐标
+        :type list_of_pixel_2d_homo: typing.List[np.ndarray]
+        """
         assert len(list_of_homography) == len(list_of_pixel_2d_homo) > 1, \
             f'单应性列表长度应大于零! {len(list_of_homography)=}， {len(list_of_pixel_2d_homo)=}'
 
@@ -848,16 +853,6 @@ class ZhangCameraCalibration:
         ] for homography in list_of_homography))
 
         assert V.shape == (2 * len(list_of_homography), 6), f'矩阵 V 的形状实际上是: {V.shape}'
-
-        # # 视图筛选（剔除病态或重投影误差大的视图）
-        # logger.debug(f'筛选前有 {len(list_of_homography)} 个视图')
-        # list_of_homography_filtered, list_of_pixel_2d_homo_filtered = assert_condition_number(
-        #     list_of_homography, list_of_pixel_2d_homo, model_2d_homo,
-        #     rmse_threshold=5.0, cond_threshold=1e6
-        # )
-        # logger.debug(f'筛选前有 {len(list_of_homography_filtered)} 个视图')
-
-        # list_of_homography, list_of_pixel_2d_homo = list_of_homography_filtered, list_of_pixel_2d_homo_filtered
 
         # 检查V矩阵是否包含无穷大或NaN值
         if np.any(np.isinf(V)) or np.any(np.isnan(V)):
@@ -964,9 +959,6 @@ class ZhangCameraCalibration:
             [.0, beta, v0],
             [.0, .0, 1.],
         ], dtype=np.float64)
-        logger.debug(f'估计的相机内参矩阵 (initial guess) K=\n{K}')
-        if realK is not None:
-            evaluate_relative_error(K, realK)
 
         rvecs_init = []  # 旋转参数
         tvecs_init = []  # 平移参数
@@ -997,6 +989,25 @@ class ZhangCameraCalibration:
             rvec = inv_rodrigues(R)
             rvecs_init.append(rvec)
             tvecs_init.append(t)
+
+        return K, rvecs_init, tvecs_init
+
+    @classmethod
+    def extract_intrinsic_parameters_from_homography(cls, list_of_homography: typing.List[np.ndarray],
+                                                     model_2d_homo: np.ndarray,
+                                                     list_of_pixel_2d_homo: typing.List[np.ndarray],
+                                                     realK: np.ndarray = None, visual: bool = False):
+        """
+        把相机内部参数逐个提取出来
+        """
+        K_init, rvecs_init, tvecs_init = cls.make_initial_guess(
+            list_of_homography, model_2d_homo,
+            list_of_pixel_2d_homo
+        )
+
+        logger.debug(f'估计的相机内参矩阵 (initial guess) K=\n{K_init}')
+        if realK is not None:
+            evaluate_relative_error(K_init, realK)
 
         # 用牛顿法
 
@@ -1086,7 +1097,7 @@ class ZhangCameraCalibration:
             assert np.isscalar(err_rmse), f'{err_rmse=}'
             return err_rmse
 
-        x0 = pack_params(K, rvecs_init, tvecs_init)
+        x0 = pack_params(K_init, rvecs_init, tvecs_init)
 
         logger.debug(f'优化之前的重投影误差：\n\t{homography_reprojection_rmse(x0):.6e}')
 
