@@ -1464,6 +1464,29 @@ def run(noise_level: float = None, num_run: int = 0, visual: bool = False):
     evaluate_relative_error(K, realK, record_error=True)
 
 
+class Lab:
+    @classmethod
+    def test_error_vs_noise(cls):
+        for noise_idx, noise_level in enumerate(ErrorVsNoise.noise_range):
+
+            logger.debug('\n' * 2 + '=' * 100)
+
+            logger.debug(f'当前噪声水平: {noise_level:.01f}')
+
+            init(noise=noise_level)  # 生成模型点和像素点
+
+            logger.debug('\n' * 2 + '-' * 100)
+
+            run(noise_level=noise_level, visual=noise_idx==len(ErrorVsNoise.noise_range) - 1)
+
+            logger.debug('\n' * 2 + '-' * 100)
+
+            # 使用 opencv 现有的算法，求解相机内参矩阵
+            compare_with_opencv()
+
+        ErrorVsNoise.plot()
+
+
 if __name__ == '__main__':
     def delete_all_pngs():
         # 获取当前目录对象
@@ -1492,21 +1515,4 @@ if __name__ == '__main__':
     logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
     logger.debug(f'真实的基本矩阵 B=\n{realKinv.T @ realKinv}')
 
-    for noise_idx, noise_level in enumerate(ErrorVsNoise.noise_range):
-
-        logger.debug('\n' * 2 + '=' * 100)
-
-        logger.debug(f'当前噪声水平: {noise_level:.01f}')
-
-        init(noise=noise_level)  # 生成模型点和像素点
-
-        logger.debug('\n' * 2 + '-' * 100)
-
-        run(noise_level=noise_level, visual=noise_idx==len(ErrorVsNoise.noise_range) - 1)
-
-        logger.debug('\n' * 2 + '-' * 100)
-
-        # 使用 opencv 现有的算法，求解相机内参矩阵
-        compare_with_opencv()
-
-    ErrorVsNoise.plot()
+    Lab.test_error_vs_noise()
