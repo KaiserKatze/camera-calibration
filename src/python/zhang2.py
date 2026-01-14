@@ -1011,6 +1011,9 @@ class ZhangCameraCalibration:
 
         # 用牛顿法
 
+        n_views = len(list_of_pixel_2d_homo)  # 视图个数（即不同姿态的相机拍摄的“照片”的张数）
+        n_iter = 0  # LM算法迭代次数
+
         def pack_params(K: np.ndarray, rvecs: list[np.ndarray], tvecs: list[np.ndarray]) -> np.ndarray:
             """
             将相机内参矩阵、旋转参数、平移参数全部打包为一个向量
@@ -1026,7 +1029,7 @@ class ZhangCameraCalibration:
                 dtype=np.float64,
             )
 
-        def unpack_params(x: np.ndarray, n_views: int):
+        def unpack_params(x: np.ndarray):
             """
             从打包好的向量中拆出相机内参矩阵、旋转参数、平移参数
             """
@@ -1049,14 +1052,11 @@ class ZhangCameraCalibration:
             tvecs = tvecs.reshape((n_views, 3))
             return K, rvecs, tvecs
 
-        n_views = len(list_of_pixel_2d_homo)  # 视图个数（即不同姿态的相机拍摄的“照片”的张数）
-        n_iter = 0  # LM算法迭代次数
-
         def residuals_joint(x: np.ndarray) -> np.ndarray:
             """
             输入相机内参和外参，输出重投影误差向量（像素点预测值与观测值的差）
             """
-            K, rvecs, tvecs = unpack_params(x, n_views)
+            K, rvecs, tvecs = unpack_params(x)
             K = K.astype(np.float64)
             K /= K[2, 2]  # 相机内参矩阵归一化
             residuals = []
@@ -1116,7 +1116,7 @@ class ZhangCameraCalibration:
         # print(f'{optimize_result=}')
         x_opt: np.ndarray
         x_opt = optimize_result.x
-        K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt, n_views)
+        K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt)
         K_opt /= K_opt[2, 2]  # 相机内参矩阵归一化
 
         logger.debug(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt):.6e}')
