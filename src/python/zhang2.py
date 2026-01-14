@@ -1145,7 +1145,9 @@ class ZhangCameraCalibration:
         )
 
         K_opt /= K_opt[2, 2]
-        return K_opt
+        return {
+            'K': K_opt,
+        }
 
     @classmethod
     def extract_intrinsic_params_and_radial_distort_coeff_from_homography(
@@ -1283,7 +1285,10 @@ class ZhangCameraCalibration:
         logger.debug(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt):.6e}')
 
         K_opt /= K_opt[2, 2]
-        return K_opt, radial_distort_coeff_opt
+        return {
+            'K': K_opt,
+            'radial': radial_distort_coeff_opt,
+        }
 
 
 def save_mat(path: str, model_2d_homo: np.ndarray,
@@ -1653,13 +1658,17 @@ def run(noise_level: float = None, num_run: int = 0, calibrator_fn: Callable = N
         # 打印单应性的条件数
         print_homography_condition(list_of_homography_filtered)
         # 估计相机内参
-        K = ZhangCameraCalibration.extract_intrinsic_parameters_from_homography(
+        calibrator_result = calibrator_fn(
             list_of_homography_filtered, model_points, list_of_image_points_filtered,
             realK=realK,
             visual=visual,
         )
+    K = calibrator_result['K']
     logger.debug(f'估计的相机内参矩阵 K=\n{K}')
     evaluate_relative_error(K, realK, record_error=True)
+    if calibrator_fn == ZhangCameraCalibration.extract_intrinsic_params_and_radial_distort_coeff_from_homography:
+        radial_distort_coeff_opt = calibrator_result['radial']
+        logger.debug(f'估计的径向畸变系数 =\n{radial_distort_coeff_opt}')
 
 
 class Lab:
@@ -1725,7 +1734,7 @@ if __name__ == '__main__':
             except Exception as e:
                 logger.debug(f'删除失败 {file_path.name}: {e}')
 
-    delete_all_pngs()
+    # delete_all_pngs()
 
     saved_data = load_mat('zhang.mat')
     image_size = saved_data['image_size']
