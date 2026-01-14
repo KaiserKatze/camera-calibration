@@ -976,9 +976,9 @@ class ZhangCameraCalibration:
             lambda1 = 1.0 / np.linalg.norm(Kinv @ h1)
             lambda2 = 1.0 / np.linalg.norm(Kinv @ h2)
 
-            rel_diff_lambda = 2.0 * abs(lambda1 - lambda2) / (lambda1 + lambda2)
+            rel_diff_lambda = 200.0 * abs(lambda1 - lambda2) / (lambda1 + lambda2)
             if rel_diff_lambda > 1e-4:
-                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}, δ={rel_diff_lambda:.8f}')
+                logger.error(f'尺度因子差距过大: {lambda1=:.8f}, {lambda2=:.8f}, δ={rel_diff_lambda:.2f}%')
 
             r1 = lambda1 * (Kinv @ h1)
             r2 = lambda1 * (Kinv @ h2)
