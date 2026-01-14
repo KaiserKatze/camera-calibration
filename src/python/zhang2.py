@@ -1113,7 +1113,6 @@ class ZhangCameraCalibration:
             verbose=2,
         )
 
-        # print(f'{optimize_result=}')
         x_opt: np.ndarray
         x_opt = optimize_result.x
         K_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt)
@@ -1124,6 +1123,143 @@ class ZhangCameraCalibration:
         K_opt /= K_opt[2, 2]
         return K_opt
 
+    @classmethod
+    def extract_intrinsic_params_and_radial_distort_coeff_from_homography(
+        cls, list_of_homography: typing.List[np.ndarray],
+        model_2d_homo: np.ndarray,
+        list_of_pixel_2d_homo: typing.List[np.ndarray],
+        realK: np.ndarray = None, visual: bool = False
+    ):
+        K_init, rvecs_init, tvecs_init = cls.make_initial_guess(
+            list_of_homography, model_2d_homo,
+            list_of_pixel_2d_homo
+        )
+        radial_distort_coeff_init = np.zeros(2, dtype=np.float32)
+
+        logger.debug(f'估计的相机内参矩阵 (initial guess) K=\n{K_init}')
+        if realK is not None:
+            evaluate_relative_error(K_init, realK)
+
+        # 用牛顿法
+
+        n_views = len(list_of_pixel_2d_homo)  # 视图个数（即不同姿态的相机拍摄的“照片”的张数）
+        n_iter = 0  # LM算法迭代次数
+
+        def pack_params(K: np.ndarray, radial_distort_coeff: np.ndarray,
+                        rvecs: list[np.ndarray], tvecs: list[np.ndarray]) -> np.ndarray:
+            """
+            将相机内参矩阵、旋转参数、平移参数全部打包为一个向量
+            """
+            parts = [
+                # 只优化相机内参矩阵的部分参数（共计 5 个参数）
+                [K[0], K[1, 1:], radial_distort_coeff],
+                (rvec.reshape(-1) for rvec in rvecs),
+                (tvec.reshape(-1) for tvec in tvecs),
+            ]
+            return np.concatenate(
+                list(itertools.chain.from_iterable(parts)),
+                dtype=np.float64,
+            )
+
+        def unpack_params(x: np.ndarray):
+            """
+            从打包好的向量中拆出相机内参矩阵、旋转参数、平移参数
+            """
+            n_params_in_K = 5
+            n_params_in_radial_distort_coeff = 2
+            x_in_K = x[:n_params_in_K]  # 首先提取相机内部参数
+            K = np.array([  # 构造相机内参矩阵
+                [x_in_K[0], x_in_K[1], x_in_K[2]],
+                [0.0, x_in_K[3], x_in_K[4]],
+                [0.0, 0.0, 1.0],
+            ], dtype=np.float64)
+            rest = x[n_params_in_K:]  # 剩余的参数
+            radial_distort_coeff = rest[:n_params_in_radial_distort_coeff]  # 提取径向畸变系数
+            rest = rest[n_params_in_radial_distort_coeff:]  # 剩余的参数
+            len_rest = rest.shape[0]
+            assert len_rest % 2 == 0, f'剩余参数个数应该是偶数! {len_rest=}'
+            assert len_rest == (len_rest_expected := 2 * n_views * 3), \
+                f'实际剩余参数个数 ({len_rest}) 与预期 ({len_rest_expected}) 不同!'
+            len_half_rest = len_rest // 2
+            rvecs = rest[:len_half_rest]
+            tvecs = rest[len_half_rest:]
+            rvecs = rvecs.reshape((n_views, 3))
+            tvecs = tvecs.reshape((n_views, 3))
+            return K, radial_distort_coeff, rvecs, tvecs
+
+        def residuals_joint(x: np.ndarray) -> np.ndarray:
+            """
+            输入相机内参和外参，输出重投影误差向量（像素点预测值与观测值的差）
+            """
+            K, radial_distort_coeff, rvecs, tvecs = unpack_params(x)
+            K = K.astype(np.float64)
+            K /= K[2, 2]  # 相机内参矩阵归一化
+            k1, k2 = radial_distort_coeff
+            residuals = []
+
+            assert model_2d_homo.ndim == 2 and model_2d_homo.shape[1] == 3, \
+                f'{model_2d_homo.ndim=}, {model_2d_homo.shape=}'
+            assert rvecs.shape[0] == tvecs.shape[0] == len(list_of_pixel_2d_homo), \
+                f'{rvecs.shape=}, {tvecs.shape=}, {len(list_of_pixel_2d_homo)=}'
+
+            for rv, tv, pixel_2d_homo in zip(rvecs, tvecs, list_of_pixel_2d_homo):
+                tv = tv.reshape(3, 1)
+                R = rodrigues(rv)  # 利用旋转参数 rv 构造旋转矩阵 R。
+                H = CameraModel.make_homography(K, R, tv)  # 利用相机内参矩阵 K、旋转矩阵 R 和平移向量 tv 构造单应性 H。
+                assert H.shape == (3, 3), f'{H.shape=}'
+                reprojection_points_homo = model_2d_homo @ H.T  # 重投影，产出像素点的齐次坐标
+                reprojection_points_nonhomo = homo2nonhomo(reprojection_points_homo)
+                # 添加径向畸变
+                reprojection_points_nonhomo = CameraModel.distort_simple_Brown_Conrady(reprojection_points_nonhomo, k1, k2)
+                pixel_2d_nonhomo = homo2nonhomo(pixel_2d_homo)
+                diff = (reprojection_points_nonhomo - pixel_2d_nonhomo).reshape(-1)
+                residuals.append(diff)
+
+            if visual:
+                nonlocal n_iter
+                if n_iter % (iter_mod := 1000) == 0:  # 每 iter_mod 次迭代，绘图一次
+                    view_index = 0
+                    title_fig = f'第 {view_index} 个机位下 第 {n_iter} 次迭代 重投影 映射关系'
+                    path_fig = f'fig-0-optimizition (iter {n_iter//iter_mod:04d}).png'
+                    CameraModel.visualize_reprojection(
+                        model_2d_homo, list_of_pixel_2d_homo, K, rvecs, tvecs,
+                        view_index, title_fig, path_fig
+                    )
+                n_iter += 1
+
+            return np.concatenate(residuals, dtype=np.float64)
+
+        def homography_reprojection_rmse(x: np.ndarray) -> float:
+            err_vec = residuals_joint(x)
+            err_rmse = np.sqrt(np.mean(err_vec ** 2))
+            assert np.isscalar(err_rmse), f'{err_rmse=}'
+            return err_rmse
+
+        x0 = pack_params(K_init, radial_distort_coeff_init, rvecs_init, tvecs_init)
+
+        logger.debug(f'优化之前的重投影误差：\n\t{homography_reprojection_rmse(x0):.6e}')
+
+        optimize_result: scipy.optimize.OptimizeResult
+        optimize_result = scipy.optimize.least_squares(
+            residuals_joint,
+            x0=x0,
+            method='lm',  # Levenberg-Marquardt algorithm
+            xtol=1e-4,
+            ftol=1e-4,
+            gtol=1e-4,
+            max_nfev=5000,  # 最多迭代 5000 * n 次
+            verbose=2,
+        )
+
+        x_opt: np.ndarray
+        x_opt = optimize_result.x
+        K_opt, radial_distort_coeff_opt, rvecs_opt, tvecs_opt = unpack_params(x_opt)
+        K_opt /= K_opt[2, 2]  # 相机内参矩阵归一化
+
+        logger.debug(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt):.6e}')
+
+        K_opt /= K_opt[2, 2]
+        return K_opt, radial_distort_coeff_opt
 
 
 def save_mat(path: str, model_2d_homo: np.ndarray,
@@ -1432,7 +1568,7 @@ def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.n
     return kept_idx
 
 
-def run(noise_level: float = None, num_run: int = 0, visual: bool = False):
+def run(noise_level: float = None, num_run: int = 0, calibrator_fn: Callable = None, visual: bool = False):
     saved_data = load_mat('zhang.mat')
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
@@ -1491,7 +1627,11 @@ class Lab:
 
             logger.debug('\n' * 2 + '-' * 100)
 
-            run(noise_level=noise_level, num_run=noise_idx, visual=noise_idx==len(ErrorVsNoise.noise_range) - 1)
+            run(
+                noise_level=noise_level, num_run=noise_idx,
+                calibrator_fn=ZhangCameraCalibration.extract_intrinsic_parameters_from_homography,
+                visual=noise_idx==len(ErrorVsNoise.noise_range) - 1,
+            )
 
             logger.debug('\n' * 2 + '-' * 100)
 
@@ -1513,7 +1653,10 @@ class Lab:
 
         logger.debug('\n' * 2 + '-' * 100)
 
-        run(visual=True)
+        run(
+            calibrator_fn=ZhangCameraCalibration.extract_intrinsic_params_and_radial_distort_coeff_from_homography,
+            visual=True
+        )
 
 
 if __name__ == '__main__':
