@@ -1495,7 +1495,13 @@ class Lab:
             CameraModel.distort_simple_Brown_Conrady,
             k1=0.1, k2=0.05,
         )
+
+        logger.debug('\n' * 2 + '=' * 100)
+
         init(distort_fn=distort_fn)
+
+        logger.debug('\n' * 2 + '-' * 100)
+
         run(visual=True)
 
 
