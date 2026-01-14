@@ -1314,7 +1314,7 @@ def load_mat(path: str) -> typing.Dict[str, np.ndarray]:
     return scipy.io.loadmat(path)
 
 
-def init(noise = None, distort_fn = None):
+def init(noise = None, distort_fn = None, random_view: bool = True):
     camera_theta = np.radians(90)
     projection_model = CameraModel(
         d=22500.0,
@@ -1346,32 +1346,52 @@ def init(noise = None, distort_fn = None):
     list_of_rotation = []
     list_of_translation = []
 
-    for angle_x in range(-60, 61, 15):
-        logger.debug(f'Rotation({angle_x}, 0, 0)')
-        rotation = Rotation(angle_x, 0.0, 0.0).R
-        translation = Translation.randomize().T
-        image_points = projection_model._arbitrary_project(model_points, rotation, translation, noise=noise, distort_fn=distort_fn)
-        # 像素点集合的直径
-        diam_image = diam_of_point_set(image_points[:, 0:2])
-        if diam_image > diam_model:
-            logger.error(f'像素点集合直径 ({diam_image:.2e}) 大于模型点集合直径 ({diam_model:.2e}) !')
-        list_of_image_points.append(image_points)
+    if random_view:  # 生成随机视图
+        for angle_x in range(-60, 61, 15):
+            logger.debug(f'Rotation({angle_x}, 0, 0)')
+            rotation = Rotation(angle_x, 0.0, 0.0).R
+            translation = Translation.randomize().T
+            image_points = projection_model._arbitrary_project(model_points, rotation, translation, noise=noise, distort_fn=distort_fn)
+            # 像素点集合的直径
+            diam_image = diam_of_point_set(image_points[:, 0:2])
+            if diam_image > diam_model:
+                logger.error(f'像素点集合直径 ({diam_image:.2e}) 大于模型点集合直径 ({diam_model:.2e}) !')
+            list_of_image_points.append(image_points)
 
-    for angle_y in itertools.chain.from_iterable([
-        range(-105, 0, 30),
-        range(15, 110, 30),
-    ]):
-        logger.debug(f'Rotation(0, {angle_y * 0.5}, 0)')
-        rotation = Rotation(0.0, angle_y * 0.5, 0.0).R
-        translation = Translation.randomize().T
-        assert translation[2, 0] > projection_model.d, \
-            f'标定板到光心的距离 ({translation[2, 0]}) 应该大于光心到像平面的距离 ({projection_model.d}) !'
-        image_points = projection_model._arbitrary_project(model_points, rotation, translation, noise=noise, distort_fn=distort_fn)
-        # 像素点集合的直径
-        diam_image = diam_of_point_set(image_points[:, 0:2])
-        if diam_image > diam_model:
-            logger.error(f'像素点集合直径 ({diam_image:.2e}) 大于模型点集合直径 ({diam_model:.2e}) !')
-        list_of_image_points.append(image_points)
+        for angle_y in itertools.chain.from_iterable([
+            range(-105, 0, 30),
+            range(15, 110, 30),
+        ]):
+            logger.debug(f'Rotation(0, {angle_y * 0.5}, 0)')
+            rotation = Rotation(0.0, angle_y * 0.5, 0.0).R
+            translation = Translation.randomize().T
+            assert translation[2, 0] > projection_model.d, \
+                f'标定板到光心的距离 ({translation[2, 0]}) 应该大于光心到像平面的距离 ({projection_model.d}) !'
+            image_points = projection_model._arbitrary_project(model_points, rotation, translation, noise=noise, distort_fn=distort_fn)
+            # 像素点集合的直径
+            diam_image = diam_of_point_set(image_points[:, 0:2])
+            if diam_image > diam_model:
+                logger.error(f'像素点集合直径 ({diam_image:.2e}) 大于模型点集合直径 ({diam_model:.2e}) !')
+            list_of_image_points.append(image_points)
+
+    else:  # 按照张正友论文仿真实验部分给出的参数确定视图
+        r1 = np.array([20, 0, 0], dtype=np.float32)
+        t1 = np.array([-9, -12.5, 500], dtype=np.float32)
+        r2 = np.array([0, 20, 0], dtype=np.float32)
+        t2 = np.array([-9, -12.5, 510], dtype=np.float32)
+        r3 = np.array([-30, -30, -15], dtype=np.float32) / np.sqrt(5)
+        t3 = np.array([-10.5, -12.5, 525], dtype=np.float32)
+        for r, t in zip([r1, r2, r3], [t1, t2, t3]):
+            image_points = projection_model._arbitrary_project(
+                model_points, Rotation(*r.tolist()).R, t.reshape((3, 1)),
+                noise=noise, distort_fn=distort_fn,
+            )
+            # 像素点集合的直径
+            diam_image = diam_of_point_set(image_points[:, 0:2])
+            if diam_image > diam_model:
+                logger.error(f'像素点集合直径 ({diam_image:.2e}) 大于模型点集合直径 ({diam_model:.2e}) !')
+            list_of_image_points.append(image_points)
+
 
     def infer_image_size(margin: int = 2, min_size: tuple[int, int] = (480, 640)):
         """
@@ -1613,7 +1633,10 @@ def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.n
         seq = model_points @ h_inv_r3.T
         seq = np.sign(seq)
         rate = abs(seq.sum()) / len(seq)
-        # logger.debug(f'单应性拟仿射性 = {rate}')
+        logger.debug(
+            f'单应性 H=\n{homography}\n'
+            f'\t拟仿射性 = {rate}'
+        )
         if rate > .95:
             kept_idx.append(idx)
     remain_ratio = len(kept_idx) / max(1, len(list_of_homography))
@@ -1621,7 +1644,8 @@ def assert_quasi_affine(list_of_homography: list[np.ndarray], model_points: np.n
     return kept_idx
 
 
-def run(noise_level: float = None, num_run: int = 0, calibrator_fn: Callable = None, visual: bool = False):
+def run(noise_level: float = None, num_run: int = 0, calibrator_fn: Callable = None, visual: bool = False,
+        enable_quasi_affine_filter: bool = True):
     saved_data = load_mat('zhang.mat')
     model_points = saved_data['model_2d_homo']
     list_of_image_points = saved_data['list_of_pixel_2d_homo']
@@ -1644,22 +1668,31 @@ def run(noise_level: float = None, num_run: int = 0, calibrator_fn: Callable = N
                 model_points, image_points
             )
             list_of_homography.append(homography)
-        # 利用单应性的 quasi-affine 假设，进行筛选
-        kept_idx = assert_quasi_affine(list_of_homography, model_points)
-        # kept_idx = kept_idx[:10]
-        list_of_homography_filtered = [
-            list_of_homography[i]
-            for i in kept_idx
-        ]
-        list_of_image_points_filtered = [
-            list_of_image_points[i]
-            for i in kept_idx
-        ]
+
+        if enable_quasi_affine_filter: # 利用单应性的 quasi-affine 假设，进行筛选
+            logger.debug('已启用单应性拟仿射筛选!')
+            kept_idx = assert_quasi_affine(list_of_homography, model_points)
+            assert len(kept_idx) > 0, f'{len(kept_idx)=}'
+            # kept_idx = kept_idx[:10]
+            list_of_homography_filtered = [
+                list_of_homography[i]
+                for i in kept_idx
+            ]
+            list_of_homography = list_of_homography_filtered
+            list_of_image_points_filtered = [
+                list_of_image_points[i]
+                for i in kept_idx
+            ]
+            list_of_image_points = list_of_image_points_filtered
+
+        else:
+            logger.debug('已禁用单应性拟仿射筛选!')
+
         # 打印单应性的条件数
-        print_homography_condition(list_of_homography_filtered)
+        print_homography_condition(list_of_homography)
         # 估计相机内参
         calibrator_result = calibrator_fn(
-            list_of_homography_filtered, model_points, list_of_image_points_filtered,
+            list_of_homography, model_points, list_of_image_points,
             realK=realK,
             visual=visual,
         )
@@ -1680,7 +1713,7 @@ class Lab:
 
             logger.debug(f'当前噪声水平: {noise_level:.01f}')
 
-            init(noise=noise_level)  # 生成模型点和像素点
+            init(noise=noise_level, random_view=False)  # 生成模型点和像素点
 
             logger.debug('\n' * 2 + '-' * 100)
 
@@ -1688,6 +1721,7 @@ class Lab:
                 noise_level=noise_level, num_run=noise_idx,
                 calibrator_fn=ZhangCameraCalibration.extract_intrinsic_parameters_from_homography,
                 visual=noise_idx==len(ErrorVsNoise.noise_range) - 1,
+                enable_quasi_affine_filter=False,
             )
 
             logger.debug('\n' * 2 + '-' * 100)
