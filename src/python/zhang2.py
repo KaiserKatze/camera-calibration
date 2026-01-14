@@ -1120,6 +1120,14 @@ class ZhangCameraCalibration:
 
         logger.debug(f'优化之后的重投影误差：\n\t{homography_reprojection_rmse(x_opt):.6e}')
 
+        title_fig = f'第 0 个机位下 优化后 重投影 映射关系'
+        path_fig = f'fig-0-optimizition (final).png'
+        CameraModel.visualize_reprojection(
+            model_2d_homo, list_of_pixel_2d_homo,
+            K_opt, rvecs_opt, tvecs_opt,
+            0, title_fig, path_fig
+        )
+
         K_opt /= K_opt[2, 2]
         return K_opt
 
