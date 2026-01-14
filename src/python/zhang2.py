@@ -1477,7 +1477,7 @@ class Lab:
 
             logger.debug('\n' * 2 + '-' * 100)
 
-            run(noise_level=noise_level, visual=noise_idx==len(ErrorVsNoise.noise_range) - 1)
+            run(noise_level=noise_level, num_run=noise_idx, visual=noise_idx==len(ErrorVsNoise.noise_range) - 1)
 
             logger.debug('\n' * 2 + '-' * 100)
 
@@ -1485,6 +1485,15 @@ class Lab:
             compare_with_opencv()
 
         ErrorVsNoise.plot()
+
+    @classmethod
+    def test_distort(cls):
+        distort_fn = functools.partial(
+            CameraModel.distort_simple_Brown_Conrady,
+            k1=0.1, k2=0.05,
+        )
+        init(distort_fn=distort_fn)
+        run(visual=True)
 
 
 if __name__ == '__main__':
@@ -1515,4 +1524,5 @@ if __name__ == '__main__':
     logger.debug(f'真实的相机内参矩阵 K=\n{realK}')
     logger.debug(f'真实的基本矩阵 B=\n{realKinv.T @ realKinv}')
 
-    Lab.test_error_vs_noise()
+    # Lab.test_error_vs_noise()
+    Lab.test_distort()
