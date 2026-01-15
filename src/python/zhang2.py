@@ -453,6 +453,37 @@ class CameraModel:
         self.v0 = v0
 
     @staticmethod
+    def category(intrinsic_matrix: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> str:
+        """
+        确定投影矩阵的类别
+
+        :param intrinsic_matrix: 相机内参矩阵
+        :type intrinsic_matrix: np.ndarray
+        :param rotation: 旋转矩阵
+        :type rotation: np.ndarray
+        :param translation: 位移向量
+        :type translation: np.ndarray
+        :return: 投影矩阵的类别
+        :rtype: str
+        """
+        A = intrinsic_matrix @ rotation
+        a1, a2, a3 = A.T
+        detA = np.linalg.det(A)
+        cross_13 = np.cross(a1, a3)
+        cross_23 = np.cross(a2, a3)
+        dot_1323 = np.dot(cross_13, cross_23)
+        dot_1313 = np.dot(cross_13, cross_13)
+        dot_2323 = np.dot(cross_23, cross_23)
+        tiny = 1e-12
+        if detA != 0:
+            if abs(dot_1323) < tiny:
+                if abs(dot_1313 - dot_2323) < tiny:
+                    return '零倾斜、等宽高的透视投影矩阵'
+                return '零倾斜透视投影矩阵'
+            return '透视投影矩阵'
+        return None
+
+    @staticmethod
     def make_homography(intrinsic_matrix: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
         """
         依据相机内参矩阵、旋转矩阵、平移向量，计算“单应性”。
