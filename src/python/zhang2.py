@@ -1346,12 +1346,12 @@ def load_mat(path: str) -> typing.Dict[str, np.ndarray]:
 
 
 def init(noise = None, distort_fn = None, random_view: bool = True):
-    camera_theta = np.radians(90)
+    camera_theta = np.radians(90)  # 将角度制转为弧度制
     projection_model = CameraModel(
         d=22500.0,
-        a=18,
-        b=25,
-        theta=camera_theta,  # 将角度制的 90.5° 转为弧度制
+        a=18,       # alpha = d/a = 1250
+        b=25,       # beta = d/b = 900
+        theta=camera_theta,
         u0=255,
         v0=255,
     )
@@ -1768,10 +1768,23 @@ class Lab:
         ErrorVsNoise.plot()
 
     @classmethod
+    def test_no_distort(cls):
+        logger.debug('\n' * 2 + '=' * 100)
+
+        init(distort_fn=None)
+
+        logger.debug('\n' * 2 + '-' * 100)
+
+        run(
+            calibrator_fn=ZhangCameraCalibration.extract_intrinsic_parameters_from_homography,
+            visual=True
+        )
+
+    @classmethod
     def test_distort(cls):
         distort_fn = functools.partial(
             CameraModel.distort_simple_Brown_Conrady,
-            k1=1e-4, k2=0.00,
+            k1=-0.2, k2=0.1,
         )
 
         logger.debug('\n' * 2 + '=' * 100)
