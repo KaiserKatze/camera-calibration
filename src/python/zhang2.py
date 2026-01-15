@@ -273,7 +273,7 @@ def generate_model_points():
 
     ni = 10  # 网格列数
     nj = 14  # 网格行数
-    a = 1000  # 每个黑色正方形的边长（像素）
+    a = 1000  # 每个黑色正方形的边长
     # 标定板上点与点之间的间距很重要，如果太小会导致重投影误差过大
 
     points_2d = []
@@ -407,8 +407,8 @@ class Translation:
 
     @classmethod
     def randomize(cls):
-        range_zmin = 30000
-        range_zmax = 50000
+        range_zmin = 60000
+        range_zmax = 100000
         Tz = np.random.uniform(range_zmin, range_zmax)
         range_x = Tz * 0.2
         range_y = Tz * 0.2
@@ -1828,4 +1828,4 @@ if __name__ == '__main__':
     logger.debug(f'真实的基本矩阵 B=\n{realKinv.T @ realKinv}')
 
     # Lab.test_error_vs_noise()
-    Lab.test_distort()
+    Lab.test_no_distort()
