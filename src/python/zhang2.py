@@ -510,41 +510,30 @@ class CameraModel:
                            distort_fn: Callable[[np.ndarray], np.ndarray] = None):
         """
         将世界坐标系中的模型点投影到像素坐标系，输入模型点的齐次坐标，返回像素点的齐次坐标
-
-        Args:
-            model_2d_homo 平面标定板上的模型点的二维齐次坐标 (x,y,1)
-
-        Returns:
-            model_2d_homo 模型点的二维齐次坐标 (x,y,1)
-            pixel_2d_homo 像素点的二维齐次坐标 (u,v,1)
-            H 单应性
         """
         assert model_2d_homo.shape[1] == 3
-        # logger.debug('\n' * 5)
-        # logger.debug(f'模型点的二维齐次坐标 model_2d_homo=\n{model_2d_homo[:5]}')
-        # 计算单应性 H
-        H = self.make_homography(self.K, rotation, translation)
-        assert H.shape == (3, 3)
 
-        # 检查H矩阵是否接近奇异（条件数过大）
-        cond_H = np.linalg.cond(H)
-        if cond_H > 1e12:
-            logger.warning(f'单应性矩阵条件数过大: {cond_H:.6e}, 可能导致数值不稳定')
+        # 相机外参矩阵
+        extrinsic_matrix = np.hstack(
+            (rotation[:, :2], translation),
+            dtype=np.float64,
+        )
 
-        logger.debug(
-            '\n' * 2 +
-            f'真实的旋转矩阵 R=\n{rotation}\n\tdet(R)={np.round(np.linalg.det(rotation), 4)}\n'
-            f'真实的平移向量 T=\n{translation}\n'
-            f'真实的单应性 H=\n{H}\n'
-            f'\t\t条件数=\n{cond_H}'
+        # 将模型点在世界坐标系中的坐标，转换为图像坐标系中的坐标
+        model_2d_homo_in_image_coordinates = model_2d_homo @ extrinsic_matrix.T
+        model_2d_nonhomo = homo2nonhomo(model_2d_homo_in_image_coordinates)
+
+        if distort_fn is not None:  # 添加畸变
+            model_2d_nonhomo = distort_fn(model_2d_nonhomo)
+
+        # 组装模型点的齐次坐标
+        distorted_model_2d_homo_in_image_coordinates = np.hstack(
+            (model_2d_nonhomo, np.ones((model_2d_nonhomo.shape[0], 1))),
+            dtype=np.float64,
         )
 
         # 计算像素点的齐次坐标
-        pixel_2d_homo = model_2d_homo @ H.T
-
-        # 检查是否有无穷大或NaN值
-        if np.any(np.isinf(pixel_2d_homo)) or np.any(np.isnan(pixel_2d_homo)):
-            raise ValueError('投影结果包含无穷大或NaN值')
+        pixel_2d_homo = distorted_model_2d_homo_in_image_coordinates @ self.K.T
 
         # 计算像素点的非齐次坐标
         pixel_2d_nonhomo = homo2nonhomo(pixel_2d_homo)
@@ -554,9 +543,6 @@ class CameraModel:
             logger.debug('正在添加高斯噪声 ...')
             noise_array = np.random.normal(0, noise, pixel_2d_nonhomo.shape)
             pixel_2d_nonhomo += noise_array
-
-        if distort_fn is not None:  # 添加畸变
-            pixel_2d_nonhomo = distort_fn(pixel_2d_nonhomo)
 
         # 重新组装像素点的齐次坐标
         pixel_2d_homo = np.hstack(
@@ -1828,4 +1814,4 @@ if __name__ == '__main__':
     logger.debug(f'真实的基本矩阵 B=\n{realKinv.T @ realKinv}')
 
     # Lab.test_error_vs_noise()
-    Lab.test_no_distort()
+    Lab.test_distort()
