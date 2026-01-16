@@ -28,32 +28,12 @@ struct ExParams {
 
     Eigen::Matrix3f GetRotation() const {
         // 按照 X,Y,Z 的顺序计算
-        Eigen::Matrix3f rMatX;
-        Eigen::Matrix3f rMatY;
-        Eigen::Matrix3f rMatZ;
-        float sin_rx;
-        float cos_rx;
-        float sin_ry;
-        float cos_ry;
-        float sin_rz;
-        float cos_rz;
-
-        sin_rx = std::sin(rx);
-        cos_rx = std::cos(rx);
-        sin_ry = std::sin(ry);
-        cos_ry = std::cos(ry);
-        sin_rz = std::sin(rz);
-        cos_rz = std::cos(rz);
-        rMatX << 1.0f, 0.0f, 0.0f,
-            0.0f, cos_rx, -sin_rx,
-            0.0f, sin_rx, cos_rx;
-        rMatY << cos_ry, 0.0f, sin_ry,
-            0.0f, 1.0f, 0.0f,
-            -sin_ry, 0.0f, cos_ry;
-        rMatZ << cos_rz, -sin_rz, 0.0f,
-            sin_rz, cos_rz, 0.0f,
-            0.0f, 0.0f, 1.0f;
-        return rMatZ * rMatY * rMatX;
+        Eigen::AngleAxisf rollAngle  (rx, Eigen::Vector3f::UnitX());
+        Eigen::AngleAxisf pitchAngle (ry, Eigen::Vector3f::UnitY());
+        Eigen::AngleAxisf yawAngle   (rz, Eigen::Vector3f::UnitZ());
+        Eigen::Quaternionf q = yawAngle * pitchAngle * rollAngle;
+        Eigen::Matrix3f rotationMatrix = q.matrix();
+        return rotationMatrix;
     }
 
     Eigen::Matrix3f GetTranslation() const {
