@@ -2,6 +2,7 @@
 #include <cmath>
 #include <vector>
 #include <string>
+#include <stdexcept>
 #include <fstream>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -86,6 +87,10 @@ Eigen::Vector3f InvRodrigues(const Eigen::Matrix3f& R) {
 }
 
 void Homo2Nonhomo(ARG_INPUT const Eigen::Matrix3Xf& homo, ARG_OUTPUT Eigen::Matrix2Xf& nonhomo) {
+    if (homo.rows() != 3) {
+        throw std::runtime_error("Homo2Nonhomo: homo must be 3xN.");
+    }
+    nonhomo.resize(2, homo.cols());
     // 使用行数组类型 (1, Dynamic) 以匹配 homo.row(i) 的维度 (1, N)
     // 不能使用 ArrayXf 作为 denom 的类型，否则会导致列向量 (N, 1)，从而在除法时触发维度断言错误
     Eigen::Array<float, 1, Eigen::Dynamic> denom = homo.row(2).array();
@@ -95,6 +100,10 @@ void Homo2Nonhomo(ARG_INPUT const Eigen::Matrix3Xf& homo, ARG_OUTPUT Eigen::Matr
 }
 
 void Nonhomo2Homo(ARG_INPUT const Eigen::Matrix2Xf& nonhomo, ARG_OUTPUT Eigen::Matrix3Xf& homo) {
+    if (nonhomo.rows() != 2) {
+        throw std::runtime_error("Nonhomo2Homo: nonhomo must be 3xN.");
+    }
+    homo.resize(3, nonhomo.cols());
     homo.row(0).array() = nonhomo.row(0).array();
     homo.row(1).array() = nonhomo.row(1).array();
     homo.row(2) = Eigen::RowVectorXf::Ones( nonhomo.cols() );
@@ -107,6 +116,9 @@ void Nonhomo2Homo(ARG_INPUT const Eigen::Matrix2Xf& nonhomo, ARG_OUTPUT Eigen::M
  * @return 变换矩阵
  */
 Eigen::Matrix3f IsotropicScalingNormalize(ARG_INPUT_OUTPUT Eigen::Matrix3Xf& points) {
+    if (points.rows() != 3) {
+        throw std::runtime_error("IsotropicScalingNormalize: points must be 3xN.");
+    }
     static const float tiny = 1e-8;
 
     // 1. 计算重心
@@ -153,6 +165,9 @@ struct DistortFunctionBrownConrady : DistortFunction {
     DistortFunctionBrownConrady(float _k1, float _k2) : k1(_k1), k2(_k2) {}
 
     virtual void Distort(ARG_INPUT_OUTPUT Eigen::Matrix3Xf& points) const override {
+        if (points.rows() != 3) {
+            throw std::runtime_error("DistortFunctionBrownConrady::Distort: points must be 3xN.");
+        }
         Eigen::Matrix2Xf nonhomo;
         Homo2Nonhomo(points, nonhomo);
         for (int i = 0; i < nonhomo.cols(); ++i) {
@@ -182,6 +197,9 @@ struct DistortFunctionBrownConrady : DistortFunction {
 auto Project(const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
              const Eigen::Matrix3f& iMat, const Eigen::Matrix3f& rMat, const Eigen::Vector3f& tVec,
              const DistortFunction& distortFunction) {
+    if (modelPointsInWorldCoordinates.rows() != 3) {
+        throw std::runtime_error("Project: modelPointsInWorldCoordinates must be 3xN.");
+    }
     Eigen::Matrix3f rtMat;
     Eigen::Matrix3Xf modelPointsInCameraCoordinates;
     Eigen::Matrix3Xf pixelPointsInImageCoordinates;
@@ -203,6 +221,16 @@ auto Project(const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
 
 Eigen::Matrix3f InferHomography(ARG_INPUT const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
                                 ARG_INPUT const Eigen::Matrix3Xf& pixelPointsInPixelCoordinates) {
+    if (modelPointsInWorldCoordinates.rows() != 3) {
+        throw std::runtime_error("InferHomography: modelPointsInWorldCoordinates must be 3xN.");
+    }
+    if (pixelPointsInPixelCoordinates.rows() != 3) {
+        throw std::runtime_error("InferHomography: pixelPointsInPixelCoordinates must be 3xN.");
+    }
+    if (modelPointsInWorldCoordinates.cols() != pixelPointsInPixelCoordinates.cols()) {
+        throw std::runtime_error("InferHomography: number of model points and pixel points must match.");
+    }
+
     // 1. 数据准备与归一化
     Eigen::Matrix3Xf modelHomo = modelPointsInWorldCoordinates;
     Eigen::Matrix3Xf pixelHomo = pixelPointsInPixelCoordinates;
@@ -225,9 +253,17 @@ Eigen::Matrix3f InferHomography(ARG_INPUT const Eigen::Matrix3Xf& modelPointsInW
         matL.row(2 * i + 1) << 0, 0, 0, x, y, w, -v * x, -v * y, -v * w;
     }
 
+    if (matL.rows() != 2 * nColsModel || matL.cols() != 9) {
+        throw std::runtime_error("InferHomography: matL shape mismatch.");
+    }
+
     // 3. SVD 求解，取最小奇异值对应的右奇异向量
     Eigen::JacobiSVD<Eigen::MatrixX9f> svd(matL, Eigen::ComputeThinV);
     Eigen::Vector9f h = svd.matrixV().col(svd.matrixV().cols() - 1);
+
+    if (h.size() != 9) {
+        throw std::runtime_error("InferHomography: SVD solution vector size mismatch.");
+    }
 
     // 4. 重构 H_norm 并去归一化
     Eigen::Matrix3f H_norm;
@@ -258,6 +294,13 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
                             ARG_INPUT const std::vector<Eigen::Matrix3Xf>& listPixelPointsInPixelCoordinates,
                             ARG_OUTPUT Eigen::Matrix3f& intrinsicMatrix,
                             ARG_OUTPUT Eigen::Vector2f& radialDistortionCoeffcients) {
+    if (modelPointsInWorldCoordinates.rows() != 3) {
+        throw std::runtime_error("ExtractIntrinsicParams: modelPointsInWorldCoordinates must be 3xN.");
+    }
+    if (listHomography.size() != listPixelPointsInPixelCoordinates.size()) {
+        throw std::runtime_error("ExtractIntrinsicParams: listHomography and listPixelPointsInPixelCoordinates size mismatch.");
+    }
+
     auto numViews = listHomography.size();
     const size_t numPointsPerView = modelPointsInWorldCoordinates.cols();
 
@@ -292,9 +335,17 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
             matV.row(2 * k + 1) = create_v_ij(matHomography, 0, 0) - create_v_ij(matHomography, 1, 1);
         }
 
+        if (matV.rows() != 2 * numViews || matV.cols() != 6) {
+             throw std::runtime_error("ExtractIntrinsicParams: matV shape mismatch.");
+        }
+
         Eigen::JacobiSVD<Eigen::MatrixX6f> svd(matV, Eigen::ComputeThinV);
         // b = [B11, B12, B22, B13, B23, B33]
         Eigen::Vector6f b = svd.matrixV().col(svd.matrixV().cols() - 1); // 最后一列
+
+        if (b.size() != 6) {
+             throw std::runtime_error("ExtractIntrinsicParams: b vector size mismatch.");
+        }
 
         if (b(0) < 0) {  // 确保 B11 为正
             b = -b;
