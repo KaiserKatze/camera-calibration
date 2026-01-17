@@ -153,8 +153,9 @@ struct DistortFunctionBrownConrady : DistortFunction {
         Eigen::Matrix2Xf nonhomo;
         Homo2Nonhomo(points, nonhomo);
         for (int i = 0; i < nonhomo.cols(); ++i) {
-            Eigen::Vector2f& point{ nonhomo.col(i) };
+            Eigen::Vector2f point = nonhomo.col(i);
             DistortPoint(point);
+            nonhomo.col(i) = point;
         }
         points.row(0) = nonhomo.row(0);
         points.row(1) = nonhomo.row(1);
@@ -241,6 +242,13 @@ Eigen::Matrix3f InferHomography(ARG_INPUT const Eigen::Matrix3Xf& modelPointsInW
 
     return H;
 }
+
+// 定义上下文结构体，用于在 GSL C 回调中传递 C++ 对象
+struct CalibrationContext {
+    const Eigen::Matrix3Xf* modelPoints;
+    const std::vector<Eigen::Matrix3Xf>* pixelPointsList;
+    size_t numViews;
+};
 
 void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHomography,
                             ARG_INPUT const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
@@ -350,7 +358,6 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
     const size_t n = 2 * numPointsPerView * numViews;
 
     gsl_vector* x;
-    // gsl_matrix* Jacobian;
     gsl_multifit_nlinear_fdf fdf;
     gsl_multifit_nlinear_parameters fdf_params;
     const gsl_multifit_nlinear_type* T;
@@ -376,8 +383,17 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
     }
 
     // 配置 GSL 求解器
+    // 准备上下文数据
+    CalibrationContext context;
+    context.modelPoints = &modelPointsInWorldCoordinates;
+    context.pixelPointsList = &listPixelPointsInPixelCoordinates;
+    context.numViews = numViews;
+
     fdf_params = gsl_multifit_nlinear_default_parameters();
-    fdf.f = [&](const gsl_vector* x, void* params, gsl_vector* f) {
+    fdf.f = [](const gsl_vector* x, void* params, gsl_vector* f) -> int {
+        // 恢复上下文
+        CalibrationContext* ctx = static_cast<CalibrationContext*>(params);
+
         float alpha = static_cast<float>(gsl_vector_get(x, 0));
         float gamma = static_cast<float>(gsl_vector_get(x, 1));
         float u0    = static_cast<float>(gsl_vector_get(x, 2));
@@ -389,7 +405,10 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         Eigen::Matrix3f iMat = InParams{ alpha, beta, gamma, u0, v0 }.GetMatrix();
         DistortFunctionBrownConrady distortFunction{ k1, k2 };
 
-        for (size_t i = 0; i < numViews; ++i) {
+        // 全局残差索引
+        size_t residualIdx = 0;
+
+        for (size_t i = 0; i < ctx->numViews; ++i) {
             size_t base = 7 + i * 6;
             Eigen::Vector3f rVec{
                 static_cast<float>(gsl_vector_get(x, base + 0)),
@@ -404,13 +423,20 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
             Eigen::Matrix3f rMat = Rodrigues(rVec);
 
             Eigen::Matrix2Xf img_reproj = Project(
-                modelPointsInWorldCoordinates,
+                *(ctx->modelPoints),
                 iMat, rMat, tVec, distortFunction
             );
-            const Eigen::Matrix2Xf& img_obs = listPixelPointsInPixelCoordinates[i].topRows(2);
-            img_reproj -= img_obs;  // 相减，得到残差向量
 
-            // TODO 把 img_reproj 作为残差向量，批量填充到 f 中
+            const Eigen::Matrix2Xf& img_obs = (*ctx->pixelPointsList)[i].topRows(2);
+
+            // 计算差值
+            img_reproj -= img_obs;
+
+            // 批量填充到 f 中
+            for (int k = 0; k < img_reproj.cols(); ++k) {
+                gsl_vector_set(f, residualIdx++, img_reproj(0, k)); // x 误差
+                gsl_vector_set(f, residualIdx++, img_reproj(1, k)); // y 误差
+            }
         }
 
         return GSL_SUCCESS;
@@ -419,7 +445,7 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
     fdf.fvv = nullptr;  // 不使用测地线加速 (二阶导数)
     fdf.n = n;
     fdf.p = p;
-    fdf.params = nullptr;
+    fdf.params = &context;
 
     // 分配求解器空间 (Trust Region - Levenberg Marquardt)
     T = gsl_multifit_nlinear_trust;
@@ -432,11 +458,11 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
     int status;
     size_t iter = 0;
     const size_t max_iter = 100;
-    const float xtol = 1e-4f;  // 参数步长容差
-    const float gtol = 1e-4f;  // 梯度容差
-    const float ftol = 1e-4f;  // 函数值容差
+    const double xtol = 1e-4;  // 参数步长容差 (注意: gsl 通常用 double)
+    const double gtol = 1e-4;  // 梯度容差
+    const double ftol = 1e-4;  // 函数值容差
 
-    double info;
+    int info;
 
     // 计算初始误差 (log)
     double initial_chi = gsl_blas_dnrm2(w->f);
