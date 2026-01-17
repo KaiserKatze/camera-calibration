@@ -23,6 +23,7 @@ using Point2dMatrix = Eigen::Matrix2Xf;
 // 用来构造系数矩阵
 namespace Eigen {
     using Vector6f = Eigen::Matrix<float, 6, 1>;
+    using RowVector6f = Eigen::Matrix<float, 1, 6>;
     using MatrixX6f = Eigen::Matrix<float, Eigen::Dynamic, 6>;
     using Vector9f = Eigen::Matrix<float, 9, 1>;
     using MatrixX9f = Eigen::Matrix<float, Eigen::Dynamic, 9>;
@@ -272,8 +273,8 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
 
     {  // make_initial_guess
         // v_ij 函数的 lambda 实现，返回 1x6 向量
-        const auto create_v_ij = [](const Eigen::Matrix3f& matHomography, int i, int j) -> Eigen::Vector6f {
-            Eigen::Vector6f v;
+        const auto create_v_ij = [](const Eigen::Matrix3f& matHomography, int i, int j) -> Eigen::RowVector6f {
+            Eigen::RowVector6f v;
             v(0) = matHomography(0, i) * matHomography(0, j);
             v(1) = matHomography(0, i) * matHomography(1, j) + matHomography(1, i) * matHomography(0, j);
             v(2) = matHomography(1, i) * matHomography(1, j);
