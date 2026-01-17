@@ -6,7 +6,10 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <Eigen/SVD>
+#include <gsl/gsl_vector.h>
+#include <gsl/gsl_matrix.h>
 #include <gsl/gsl_multifit_nlinear.h>
+#include <gsl/gsl_blas.h>
 
 #define CONSTANT_PI 3.14159265358979323846f
 #define ARG_INPUT
@@ -150,7 +153,7 @@ struct DistortFunctionBrownConrady : DistortFunction {
         Eigen::Matrix2Xf nonhomo;
         Homo2Nonhomo(points, nonhomo);
         for (int i = 0; i < nonhomo.cols(); ++i) {
-            DistrotPoint(nonhomo.col(i));
+            DistortPoint(nonhomo.col(i));
         }
         points.row(0) = nonhomo.row(0);
         points.row(1) = nonhomo.row(1);
@@ -244,6 +247,8 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
                             ARG_OUTPUT Eigen::Matrix3f& intrinsicMatrix,
                             ARG_OUTPUT Eigen::Vector2f& radialDistortionCoeffcients) {
     auto numViews = listHomography.size();
+    const size_t numPointsPerView = modelPointsInWorldCoordinates.cols();
+
     if (numViews < 3) {
         std::cerr << "Warning: At least 3 views are required for calibration (technically 2 if skew is 0, but 3 is safer).\n";
     }
@@ -338,9 +343,6 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         }
     }
 
-    const size_t numViews = list_of_pixel_2d_homo.size();
-    const size_t numPointsPerView = model_2d_homo.cols();
-
     // 参数数量
     const size_t p = 7 + 6 * numViews;
     // 残差数量
@@ -375,13 +377,13 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
     // 配置 GSL 求解器
     fdf_params = gsl_multifit_nlinear_default_parameters();
     fdf.f = [&](const gsl_vector* x, void* params, gsl_vector* f) {
-        float alpha = gsl_vector_get(x, 0);
-        float gamma = gsl_vector_get(x, 1);
-        float u0    = gsl_vector_get(x, 2);
-        float beta  = gsl_vector_get(x, 3);
-        float v0    = gsl_vector_get(x, 4);
-        float k1    = gsl_vector_get(x, 5);
-        float k2    = gsl_vector_get(x, 6);
+        float alpha = static_cast<float>(gsl_vector_get(x, 0));
+        float gamma = static_cast<float>(gsl_vector_get(x, 1));
+        float u0    = static_cast<float>(gsl_vector_get(x, 2));
+        float beta  = static_cast<float>(gsl_vector_get(x, 3));
+        float v0    = static_cast<float>(gsl_vector_get(x, 4));
+        float k1    = static_cast<float>(gsl_vector_get(x, 5));
+        float k2    = static_cast<float>(gsl_vector_get(x, 6));
 
         Eigen::Matrix3f iMat = InParams{ alpha, beta, gamma, u0, v0 }.GetMatrix();
         DistortFunctionBrownConrady distortFunction{ k1, k2 };
@@ -389,14 +391,14 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         for (size_t i = 0; i < numViews; ++i) {
             size_t base = 7 + i * 6;
             Eigen::Vector3f rVec{
-                gsl_vector_get(x, base + 0),
-                gsl_vector_get(x, base + 1),
-                gsl_vector_get(x, base + 2),
+                static_cast<float>(gsl_vector_get(x, base + 0)),
+                static_cast<float>(gsl_vector_get(x, base + 1)),
+                static_cast<float>(gsl_vector_get(x, base + 2)),
             };
             Eigen::Vector3f tVec{
-                gsl_vector_get(x, base + 3),
-                gsl_vector_get(x, base + 4),
-                gsl_vector_get(x, base + 5),
+                static_cast<float>(gsl_vector_get(x, base + 3)),
+                static_cast<float>(gsl_vector_get(x, base + 4)),
+                static_cast<float>(gsl_vector_get(x, base + 5)),
             };
             Eigen::Matrix3f rMat = Rodrigues(rVec);
 
@@ -451,7 +453,7 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         // 检查收敛条件
         status = gsl_multifit_nlinear_test(xtol, gtol, ftol, &info, w);
 
-        if (visual && iter % 10 == 0) {
+        if (iter % 10 == 0) {
             std::cout << "[GSL] Iter " << iter << " RMSE: "
                 << std::sqrt(gsl_blas_dnrm2(w->f) * gsl_blas_dnrm2(w->f) / n)
                 << std::endl;
@@ -461,10 +463,17 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
 
     // 4. 提取结果
     gsl_vector* x_opt = w->x; // 最优解
-    intrinsicMatrix << gsl_vector_get(x_opt, 0), gsl_vector_get(x_opt, 1), gsl_vector_get(x_opt, 2),
-                       0.0f,                     gsl_vector_get(x_opt, 3), gsl_vector_get(x_opt, 4),
-                       0.0f,                     0.0f,                     1.0f;
-    radialDistortionCoeffcients << gsl_vector_get(x_opt, 5), gsl_vector_get(x_opt, 6);
+    intrinsicMatrix << static_cast<float>(gsl_vector_get(x_opt, 0)),
+                       static_cast<float>(gsl_vector_get(x_opt, 1)),
+                       static_cast<float>(gsl_vector_get(x_opt, 2)),
+                       0.0f,
+                       static_cast<float>(gsl_vector_get(x_opt, 3)),
+                       static_cast<float>(gsl_vector_get(x_opt, 4)),
+                       0.0f,
+                       0.0f,
+                       1.0f;
+    radialDistortionCoeffcients << static_cast<float>(gsl_vector_get(x_opt, 5)),
+                                   static_cast<float>(gsl_vector_get(x_opt, 6));
 
     double final_chi = gsl_blas_dnrm2(w->f);
     double final_rmse = std::sqrt(final_chi * final_chi / n);
