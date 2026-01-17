@@ -153,7 +153,8 @@ struct DistortFunctionBrownConrady : DistortFunction {
         Eigen::Matrix2Xf nonhomo;
         Homo2Nonhomo(points, nonhomo);
         for (int i = 0; i < nonhomo.cols(); ++i) {
-            DistortPoint(nonhomo.col(i));
+            Eigen::Vector2f& point{ nonhomo.col(i) };
+            DistortPoint(point);
         }
         points.row(0) = nonhomo.row(0);
         points.row(1) = nonhomo.row(1);
