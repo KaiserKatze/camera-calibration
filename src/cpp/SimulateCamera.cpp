@@ -85,7 +85,9 @@ Eigen::Vector3f InvRodrigues(const Eigen::Matrix3f& R) {
 }
 
 void Homo2Nonhomo(ARG_INPUT const Eigen::Matrix3Xf& homo, ARG_OUTPUT Eigen::Matrix2Xf& nonhomo) {
-    Eigen::ArrayXf denom = homo.row(2).array();
+    // 使用行数组类型 (1, Dynamic) 以匹配 homo.row(i) 的维度 (1, N)
+    // 不能使用 ArrayXf 作为 denom 的类型，否则会导致列向量 (N, 1)，从而在除法时触发维度断言错误
+    Eigen::Array<float, 1, Eigen::Dynamic> denom = homo.row(2).array();
     denom = (denom.abs() < 1e-12).select(1e-12, denom); // 如果绝对值小于阈值，设为 1e-12
     nonhomo.row(0).array() = homo.row(0).array() / denom;
     nonhomo.row(1).array() = homo.row(1).array() / denom;
