@@ -6,6 +6,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <Eigen/SVD>
+#include <gsl/gsl_multifit_nlinear.h>
 
 #define CONSTANT_PI 3.14159265358979323846f
 #define ARG_INPUT
@@ -16,6 +17,13 @@
 using Point3dMatrix = Eigen::Matrix3Xf;
 // 每一个列向量都是一个点的非齐次坐标
 using Point2dMatrix = Eigen::Matrix2Xf;
+// 用来构造系数矩阵
+namespace Eigen {
+    using Vector6f = Eigen::Matrix<float, 6, 1>;
+    using MatrixX6f = Eigen::Matrix<float, Eigen::Dynamic, 6>;
+    using Vector9f = Eigen::Matrix<float, 9, 1>;
+    using MatrixX9f = Eigen::Matrix<float, Eigen::Dynamic, 9>;
+}
 
 struct InParams {
     float alpha;
@@ -57,6 +65,21 @@ struct ExParams {
         return Eigen::Vector3f(tx, ty, tz);
     }
 };
+
+// 罗德里格斯变换变换 (Rodrigues Vector -> Rotation Matrix)
+Eigen::Matrix3f Rodrigues(const Eigen::Vector3f& rVec) {
+    float angle = rVec.norm();
+    if (angle < 1e-8f) {
+        return Eigen::Matrix3f::Identity();
+    }
+    return Eigen::AngleAxisf(angle, rVec.normalized()).toRotationMatrix();
+}
+
+// 罗德里格斯变换逆变换 (Rotation Matrix -> Rodrigues Vector)
+Eigen::Vector3f InvRodrigues(const Eigen::Matrix3f& R) {
+    Eigen::AngleAxisf angleAxis(R);
+    return angleAxis.angle() * angleAxis.axis();
+}
 
 void Homo2Nonhomo(ARG_INPUT const Eigen::Matrix3Xf& homo, ARG_OUTPUT Eigen::Matrix2Xf& nonhomo) {
     Eigen::ArrayXf denom = homo.row(2).array();
@@ -107,7 +130,12 @@ Eigen::Matrix3f IsotropicScalingNormalize(ARG_INPUT_OUTPUT Eigen::Matrix3Xf& poi
 }
 
 struct DistortFunction {  // 基类
-    virtual void distort(ARG_INPUT_OUTPUT Eigen::Matrix3Xf& points) const {}  // 默认无畸变
+    /**
+     * @param points: 理想的（无畸变的）像素点坐标，归一化图像坐标系
+     */
+    virtual void Distort(ARG_INPUT_OUTPUT Eigen::Matrix3Xf& points) const {}
+
+    virtual void DistortPoint(ARG_INPUT_OUTPUT Eigen::Vector2f& point) const {}
 };
 
 /**
@@ -118,36 +146,34 @@ struct DistortFunctionBrownConrady : DistortFunction {
 
     DistortFunctionBrownConrady(float _k1, float _k2) : k1(_k1), k2(_k2) {}
 
-    /**
-     * @param points: 理想的（无畸变的）像素点坐标，归一化图像坐标系中
-     */
-    virtual void distort(ARG_INPUT_OUTPUT Eigen::Matrix3Xf& points) const override {
+    virtual void Distort(ARG_INPUT_OUTPUT Eigen::Matrix3Xf& points) const override {
         Eigen::Matrix2Xf nonhomo;
         Homo2Nonhomo(points, nonhomo);
         for (int i = 0; i < nonhomo.cols(); ++i) {
-            float x = nonhomo(0, i);
-            float y = nonhomo(1, i);
-            float r2 = x * x + y * y;
-            float coeff = 1.0f + k1 * r2 + k2 * r2 * r2;
-            nonhomo(0, i) = x * coeff;
-            nonhomo(1, i) = y * coeff;
+            DistrotPoint(nonhomo.col(i));
         }
         points.row(0) = nonhomo.row(0);
         points.row(1) = nonhomo.row(1);
     }
+
+    virtual void DistortPoint(ARG_INPUT_OUTPUT Eigen::Vector2f& point) const override {
+        float r2 = point.squaredNorm();
+        float coeff = 1.0f + k1 * r2 + k2 * r2 * r2;
+        point *= coeff;
+    }
 };
 
+/**
+ * 将模型点投影到像平面上，得到像素点的非齐次坐标
+ *
+ * @param modelPointsInWorldCoordinates: 模型点在世界坐标系中的齐次坐标（默认 Z 坐标为 0）
+ * @param iMat: 相机内部参数矩阵
+ * @param rMat: 旋转矩阵
+ * @param tVec: 平移向量
+ */
 auto Project(const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
              const Eigen::Matrix3f& iMat, const Eigen::Matrix3f& rMat, const Eigen::Vector3f& tVec,
              const DistortFunction& distortFunction) {
-    /**
-     * 将模型点投影到像平面上，得到像素点的非齐次坐标
-     *
-     * @param modelPointsInWorldCoordinates: 模型点在世界坐标系中的齐次坐标（默认 Z 坐标为 0）
-     * @param iMat: 相机内部参数矩阵
-     * @param rMat: 旋转矩阵
-     * @param tVec: 平移向量
-     */
     Eigen::Matrix3f rtMat;
     Eigen::Matrix3Xf modelPointsInCameraCoordinates;
     Eigen::Matrix3Xf pixelPointsInImageCoordinates;
@@ -159,7 +185,7 @@ auto Project(const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
     // 将模型点的齐次坐标从世界坐标系变换到相机坐标系
     modelPointsInCameraCoordinates = rtMat * modelPointsInWorldCoordinates;
     // 套用畸变模型
-    distortFunction.distort(modelPointsInCameraCoordinates);
+    distortFunction.Distort(modelPointsInCameraCoordinates);
     // 将模型点投影到像平面，得到像素点在像平面坐标系上的齐次坐标
     pixelPointsInImageCoordinates = iMat * modelPointsInCameraCoordinates;
     // 归一化得到像素点的非齐次坐标
@@ -167,48 +193,373 @@ auto Project(const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
     return pixelPointsInPixelCoordinates;
 }
 
-// typedef Eigen::Matrix<float, 2, 1> Eigen::Vector2f
-
-
 Eigen::Matrix3f InferHomography(ARG_INPUT const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
                                 ARG_INPUT const Eigen::Matrix3Xf& pixelPointsInPixelCoordinates) {
-    Eigen::Matrix3Xf modelHomo{ modelPointsInWorldCoordinates };
-    Eigen::Matrix3Xf pixelHomo{ pixelPointsInPixelCoordinates };
-    Eigen::Matrix3f sMatForModel = IsotropicScalingNormalize(modelHomo);
-    Eigen::Matrix3f sMatForPixel = IsotropicScalingNormalize(pixelHomo);
-    Eigen::Matrix3Xf zeros;
-    Eigen::Matrix3f homography;
-    // TODO 完成 infer_homography_without_radial_distortion 和 infer_homography_without_radial_distortion_with_isotropic_scaling 所做的工作
-    return homography;
+    // 1. 数据准备与归一化
+    Eigen::Matrix3Xf modelHomo = modelPointsInWorldCoordinates;
+    Eigen::Matrix3Xf pixelHomo = pixelPointsInPixelCoordinates;
+    Eigen::Matrix3f T_model = IsotropicScalingNormalize(modelHomo);
+    Eigen::Matrix3f T_pixel = IsotropicScalingNormalize(pixelHomo);
+
+    int nColsModel = modelHomo.cols();
+    // 2. 构造矩阵 matL (2N x 9)
+    Eigen::MatrixX9f matL(2 * nColsModel, 9);
+    matL.setZero();
+    for (int i = 0; i < nColsModel; ++i) {
+        float x = modelHomo(0, i);
+        float y = modelHomo(1, i);
+        float w = modelHomo(2, i);
+        float u = pixelHomo(0, i);
+        float v = pixelHomo(1, i);
+        // Row 1: [X, Y, W, 0, 0, 0, -uX, -uY, -uW]
+        matL.row(2 * i)     << x, y, w, 0, 0, 0, -u * x, -u * y, -u * w;
+        // Row 2: [0, 0, 0, X, Y, W, -vX, -vY, -vW]
+        matL.row(2 * i + 1) << 0, 0, 0, x, y, w, -v * x, -v * y, -v * w;
+    }
+
+    // 3. SVD 求解，取最小奇异值对应的右奇异向量
+    Eigen::JacobiSVD<Eigen::MatrixX9f> svd(matL, Eigen::ComputeThinV);
+    Eigen::Vector9f h = svd.matrixV().col(svd.matrixV().cols() - 1);
+
+    // 4. 重构 H_norm 并去归一化
+    Eigen::Matrix3f H_norm;
+    H_norm << h(0), h(1), h(2),
+              h(3), h(4), h(5),
+              h(6), h(7), h(8);
+
+    // H = inv(T_pixel) * H_norm * T_model
+    Eigen::Matrix3f H = T_pixel.inverse() * H_norm * T_model;
+
+    // 归一化 H，使 H(2,2) = 1 (如果非零)
+    if (std::abs(H(2, 2)) > 1e-8) {
+        H /= H(2, 2);
+    }
+
+    return H;
 }
 
-Eigen::Matrix3Xf LoadModelData(const char* pathData) {
-    // 从硬盘上的某个文件读取模型点的坐标数据
-}
-
-std::vector<Eigen::Matrix3Xf> LoadPixelData(const char* pathData) {
-    // 从硬盘上的某个文件读取像素点的坐标数据
-}
-
-void ExtractIntrinsicParams(ARG_INPUT std::vector<Eigen::Matrix3f>& listHomography,
-                            ARG_INPUT Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
-                            ARG_INPUT std::vector<Eigen::Matrix3Xf>& listPixelPointsInPixelCoordinates,
+void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHomography,
+                            ARG_INPUT const Eigen::Matrix3Xf& modelPointsInWorldCoordinates,
+                            ARG_INPUT const std::vector<Eigen::Matrix3Xf>& listPixelPointsInPixelCoordinates,
                             ARG_OUTPUT Eigen::Matrix3f& intrinsicMatrix,
                             ARG_OUTPUT Eigen::Vector2f& radialDistortionCoeffcients) {
-    // TODO 完成 extract_intrinsic_params_and_radial_distort_coeff_from_homography 的工作
+    auto numViews = listHomography.size();
+    if (numViews < 3) {
+        std::cerr << "Warning: At least 3 views are required for calibration (technically 2 if skew is 0, but 3 is safer).\n";
+    }
+
+    std::vector<Eigen::Vector3f> rVecs;
+    std::vector<Eigen::Vector3f> tVecs;
+
+    rVecs.reserve(numViews);
+    tVecs.reserve(numViews);
+
+    {  // make_initial_guess
+        // v_ij 函数的 lambda 实现，返回 1x6 向量
+        const auto create_v_ij = [](const Eigen::Matrix3f& matHomography, int i, int j) -> Eigen::Vector6f {
+            Eigen::Vector6f v;
+            v(0) = matHomography(0, i) * matHomography(0, j);
+            v(1) = matHomography(0, i) * matHomography(1, j) + matHomography(1, i) * matHomography(0, j);
+            v(2) = matHomography(1, i) * matHomography(1, j);
+            v(3) = matHomography(2, i) * matHomography(0, j) + matHomography(0, i) * matHomography(2, j);
+            v(4) = matHomography(2, i) * matHomography(1, j) + matHomography(1, i) * matHomography(2, j);
+            v(5) = matHomography(2, i) * matHomography(2, j);
+            return v;
+        };
+
+        // 构造系数矩阵
+        Eigen::MatrixX6f matV(2 * numViews, 6);
+        for (decltype(numViews) k = 0; k < numViews; ++k) {
+            const Eigen::Matrix3f& matHomography = listHomography[k];
+            matV.row(2 * k) = create_v_ij(matHomography, 0, 1);
+            matV.row(2 * k + 1) = create_v_ij(matHomography, 0, 0) - create_v_ij(matHomography, 1, 1);
+        }
+
+        Eigen::JacobiSVD<Eigen::MatrixX6f> svd(matV, Eigen::ComputeThinV);
+        // b = [B11, B12, B22, B13, B23, B33]
+        Eigen::Vector6f b = svd.matrixV().col(svd.matrixV().cols() - 1); // 最后一列
+
+        if (b(0) < 0) {  // 确保 B11 为正
+            b = -b;
+        }
+
+        {  // 计算基本矩阵、中间变量
+            float B11 = b(0);
+            float B12 = b(1);
+            float B22 = b(2);
+            float B13 = b(3);
+            float B23 = b(4);
+            float B33 = b(5);
+
+            float mid1 = B12 * B13 - B11 * B23;
+            float mid2 = B11 * B22 - B12 * B12;
+            float v0 = mid1 / mid2;
+            float lambda = B33 - (B13 * B13 + v0 * mid1) / B11;
+            float alpha2 = lambda / B11;
+            float alpha = std::sqrt(alpha2);
+            float beta = std::sqrt(lambda * B11 / mid2);
+            float gamma = -B12 * alpha2 * beta / lambda;
+            float u0 = gamma * v0 / beta - B13 * alpha2 / lambda;
+
+            intrinsicMatrix <<  alpha, gamma, u0,
+                                0.0f,  beta,  v0,
+                                0.0f,  0.0f,  1.0f;
+            radialDistortionCoeffcients << 0.0f, 0.0f;
+        }
+
+        Eigen::Matrix3f invIntrinsicMatrix = intrinsicMatrix.inverse();
+
+        const auto approximate_rotation_matrix = [](Eigen::Matrix3f& mat) -> void {
+            Eigen::JacobiSVD<Eigen::Matrix3f> svd(mat, Eigen::ComputeFullU | Eigen::ComputeFullV);
+            const Eigen::Matrix3f& U = svd.matrixU();
+            const Eigen::Matrix3f& V = svd.matrixV();
+            mat = U * V.transpose();
+        };
+
+        for (const Eigen::Matrix3f& matHomography : listHomography) {
+            const Eigen::Vector3f& h1 = matHomography.row(0);
+            const Eigen::Vector3f& h2 = matHomography.row(1);
+            const Eigen::Vector3f& h3 = matHomography.row(2);
+            Eigen::Vector3f invKh1 = invIntrinsicMatrix * h1;
+            Eigen::Vector3f invKh2 = invIntrinsicMatrix * h2;
+            Eigen::Vector3f invKh3 = invIntrinsicMatrix * h3;
+            float lambda1 = 1.0f / invKh1.norm();
+            Eigen::Vector3f r1 = lambda1 * invKh1;
+            Eigen::Vector3f r2 = lambda1 * invKh2;
+            Eigen::Vector3f r3 = r1.cross(r2);
+            Eigen::Vector3f t = lambda1 * invKh3;
+            Eigen::Matrix3f matR;
+            matR.col(0) = r1;
+            matR.col(1) = r2;
+            matR.col(2) = r3;
+            approximate_rotation_matrix(matR);
+            rVecs.push_back(InvRodrigues(matR));
+            tVecs.push_back(t);
+        }
+    }
+
+    const size_t numViews = list_of_pixel_2d_homo.size();
+    const size_t numPointsPerView = model_2d_homo.cols();
+
+    // 参数数量
+    const size_t p = 7 + 6 * numViews;
+    // 残差数量
+    const size_t n = 2 * numPointsPerView * numViews;
+
+    gsl_vector* x;
+    // gsl_matrix* Jacobian;
+    gsl_multifit_nlinear_fdf fdf;
+    gsl_multifit_nlinear_parameters fdf_params;
+    const gsl_multifit_nlinear_type* T;
+    gsl_multifit_nlinear_workspace* w;
+
+    // 初始化参数向量 x
+    x = gsl_vector_alloc(p);
+    gsl_vector_set(x, 0, intrinsicMatrix(0, 0)); // alpha
+    gsl_vector_set(x, 1, intrinsicMatrix(0, 1)); // gamma
+    gsl_vector_set(x, 2, intrinsicMatrix(0, 2)); // u0
+    gsl_vector_set(x, 3, intrinsicMatrix(1, 1)); // beta
+    gsl_vector_set(x, 4, intrinsicMatrix(1, 2)); // v0
+    gsl_vector_set(x, 5, 0.0f);  // 初始畸变系数设为 0
+    gsl_vector_set(x, 6, 0.0f);
+    for (size_t i = 0; i < numViews; ++i) {
+        size_t base = 7 + i * 6;
+        gsl_vector_set(x, base + 0, rVecs[i].x());
+        gsl_vector_set(x, base + 1, rVecs[i].y());
+        gsl_vector_set(x, base + 2, rVecs[i].z());
+        gsl_vector_set(x, base + 3, tVecs[i].x());
+        gsl_vector_set(x, base + 4, tVecs[i].y());
+        gsl_vector_set(x, base + 5, tVecs[i].z());
+    }
+
+    // 配置 GSL 求解器
+    fdf_params = gsl_multifit_nlinear_default_parameters();
+    fdf.f = [&](const gsl_vector* x, void* params, gsl_vector* f) {
+        float alpha = gsl_vector_get(x, 0);
+        float gamma = gsl_vector_get(x, 1);
+        float u0    = gsl_vector_get(x, 2);
+        float beta  = gsl_vector_get(x, 3);
+        float v0    = gsl_vector_get(x, 4);
+        float k1    = gsl_vector_get(x, 5);
+        float k2    = gsl_vector_get(x, 6);
+
+        Eigen::Matrix3f iMat = InParams{ alpha, beta, gamma, u0, v0 }.GetMatrix();
+        DistortFunctionBrownConrady distortFunction{ k1, k2 };
+
+        for (size_t i = 0; i < numViews; ++i) {
+            size_t base = 7 + i * 6;
+            Eigen::Vector3f rVec{
+                gsl_vector_get(x, base + 0),
+                gsl_vector_get(x, base + 1),
+                gsl_vector_get(x, base + 2),
+            };
+            Eigen::Vector3f tVec{
+                gsl_vector_get(x, base + 3),
+                gsl_vector_get(x, base + 4),
+                gsl_vector_get(x, base + 5),
+            };
+            Eigen::Matrix3f rMat = Rodrigues(rVec);
+
+            Eigen::Matrix2Xf img_reproj = Project(
+                modelPointsInWorldCoordinates,
+                iMat, rMat, tVec, distortFunction
+            );
+            const Eigen::Matrix2Xf& img_obs = listPixelPointsInPixelCoordinates[i].topRows(2);
+            img_reproj -= img_obs;  // 相减，得到残差向量
+
+            // TODO 把 img_reproj 作为残差向量，批量填充到 f 中
+        }
+
+        return GSL_SUCCESS;
+    };  // 残差函数
+    fdf.df = nullptr;  // 雅可比函数 (如果设为 NULL，GSL 会使用有限差分近似)
+    fdf.fvv = nullptr;  // 不使用测地线加速 (二阶导数)
+    fdf.n = n;
+    fdf.p = p;
+    fdf.params = nullptr;
+
+    // 分配求解器空间 (Trust Region - Levenberg Marquardt)
+    T = gsl_multifit_nlinear_trust;
+    w = gsl_multifit_nlinear_alloc(T, &fdf_params, n, p);
+
+    // 初始化求解器
+    gsl_multifit_nlinear_init(x, &fdf, w);
+
+    // 3. 执行优化迭代
+    int status;
+    size_t iter = 0;
+    const size_t max_iter = 100;
+    const float xtol = 1e-4f;  // 参数步长容差
+    const float gtol = 1e-4f;  // 梯度容差
+    const float ftol = 1e-4f;  // 函数值容差
+
+    double info;
+
+    // 计算初始误差 (log)
+    double initial_chi = gsl_blas_dnrm2(w->f);
+    double initial_rmse = std::sqrt(initial_chi * initial_chi / n);
+    std::cout << "[GSL] Initial RMSE: " << initial_rmse << std::endl;
+
+    do {
+        iter++;
+        status = gsl_multifit_nlinear_iterate(w);
+
+        if (status) {
+            break;  // 发生错误
+        }
+
+        // 检查收敛条件
+        status = gsl_multifit_nlinear_test(xtol, gtol, ftol, &info, w);
+
+        if (visual && iter % 10 == 0) {
+            std::cout << "[GSL] Iter " << iter << " RMSE: "
+                << std::sqrt(gsl_blas_dnrm2(w->f) * gsl_blas_dnrm2(w->f) / n)
+                << std::endl;
+        }
+
+    } while (status == GSL_CONTINUE && iter < max_iter);
+
+    // 4. 提取结果
+    gsl_vector* x_opt = w->x; // 最优解
+    intrinsicMatrix << gsl_vector_get(x_opt, 0), gsl_vector_get(x_opt, 1), gsl_vector_get(x_opt, 2),
+                       0.0f,                     gsl_vector_get(x_opt, 3), gsl_vector_get(x_opt, 4),
+                       0.0f,                     0.0f,                     1.0f;
+    radialDistortionCoeffcients << gsl_vector_get(x_opt, 5), gsl_vector_get(x_opt, 6);
+
+    double final_chi = gsl_blas_dnrm2(w->f);
+    double final_rmse = std::sqrt(final_chi * final_chi / n);
+    std::cout << "[GSL] Final RMSE: " << final_rmse << " (Status: " << gsl_strerror(status) << ")" << std::endl;
+
+    // 清理内存
+    gsl_multifit_nlinear_free(w);
+    gsl_vector_free(x);
+
+    std::cout << "[Info] Linear initialization finished.\n";
+}
+
+// 模拟数据加载 (Placeholder)
+Eigen::Matrix3Xf LoadModelData(const char* pathData) {
+    // 实际项目中应读取文件
+    // 这里生成一个 10x14 的棋盘格模型点
+    int ni = 10, nj = 14;
+    float square_size = 1000.0f; // mm?
+    Eigen::Matrix3Xf modelPoints(3, ni * nj);
+    int col = 0;
+    for (int i = 0; i < ni; ++i) {
+        for (int j = 0; j < nj; ++j) {
+            modelPoints(0, col) = i * square_size;
+            modelPoints(1, col) = j * square_size;
+            modelPoints(2, col) = 1.0f;
+            col++;
+        }
+    }
+    // 居中 (可选)
+    Eigen::Vector3f centroid = modelPoints.rowwise().mean();
+    modelPoints.row(0).array() -= centroid(0);
+    modelPoints.row(1).array() -= centroid(1);
+
+    // 重新排序逻辑需与 Python 一致，这里简化
+    return modelPoints;
+}
+
+// 模拟像素数据 (Placeholder)
+std::vector<Eigen::Matrix3Xf> LoadPixelData(const char* pathData, const Eigen::Matrix3Xf& model) {
+    // 实际项目中应读取像素坐标文件
+    // 这里简单通过一个预设的 K 和 RT 投影生成一些带噪声的数据用于测试代码连通性
+    std::vector<Eigen::Matrix3Xf> pixelList;
+
+    Eigen::Matrix3f K_GT;
+    K_GT << 1250, 0, 255,
+            0, 900, 255,
+            0, 0, 1;
+
+    // 生成 3 个视图
+    for (int i = 0; i < 3; ++i) {
+        Eigen::Matrix3f R = Eigen::AngleAxisf(0.2f * (i+1), Eigen::Vector3f::UnitX()).toRotationMatrix();
+        Eigen::Vector3f t(0.0f, 0.0f, 60000.0f + i * 1000.0f);
+
+        Eigen::Matrix3Xf pixelPoints(3, model.cols());
+
+        // Project: pixelHomo = K * (R*X + t)
+        Eigen::Matrix3Xf cameraPoints = R * model;
+        cameraPoints.colwise() += t;
+
+        // 归一化平面畸变 (这里模拟无畸变)
+        Eigen::Matrix2Xf normImgPoints(2, model.cols());
+        Homo2Nonhomo(cameraPoints, normImgPoints);
+
+        // 再次齐次化去乘 K
+        Eigen::Matrix3Xf normImgPointsH;
+        Nonhomo2Homo(normImgPoints, normImgPointsH);
+
+        pixelPoints = K_GT * normImgPointsH;
+        pixelList.push_back(pixelPoints);
+    }
+    return pixelList;
 }
 
 int main() {
+    std::cout << "Starting Zhang's Calibration C++ implementation...\n";
+
     Eigen::Matrix3Xf modelPointsInWorldCoordinates = LoadModelData("models.txt");
-    std::vector<Eigen::Matrix3Xf> listPixelPointsInPixelCoordinates = LoadPixelData("pixels.txt");
+    std::vector<Eigen::Matrix3Xf> listPixelPointsInPixelCoordinates = LoadPixelData("pixels.txt", modelPointsInWorldCoordinates);
+
     std::vector<Eigen::Matrix3f> listHomography;
+    std::cout << "Inferring Homographies...\n";
     for (const Eigen::Matrix3Xf& pixelPointsInPixelCoordinates : listPixelPointsInPixelCoordinates) {
         listHomography.push_back(InferHomography(modelPointsInWorldCoordinates, pixelPointsInPixelCoordinates));
     }
+
     Eigen::Matrix3f intrinsicMatrix;
     Eigen::Vector2f radialDistortionCoeffcients;
+
+    std::cout << "Extracting Intrinsics...\n";
     ExtractIntrinsicParams(listHomography, modelPointsInWorldCoordinates, listPixelPointsInPixelCoordinates, intrinsicMatrix, radialDistortionCoeffcients);
-    std::cout << "Estimated Intrinsic Matrix:\n" << intrinsicMatrix
-        << "\nEstimated Radial Distortion Coefficients:\n" << radialDistortionCoeffcients << '\n';
+
+    std::cout << "------------------------------------------\n"
+        << "Estimated Intrinsic Matrix (K):\n" << intrinsicMatrix << std::endl
+        << "Estimated Radial Distortion Coefficients:\n" << radialDistortionCoeffcients.transpose() << std::endl
+        << "------------------------------------------\n";
+
     return 0;
 }

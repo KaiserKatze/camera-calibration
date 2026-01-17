@@ -992,12 +992,12 @@ class ZhangCameraCalibration:
             [.0, beta, v0],
             [.0, .0, 1.],
         ], dtype=np.float64)
+        Kinv = np.linalg.inv(K)
 
         rvecs_init = []  # 旋转参数
         tvecs_init = []  # 平移参数
         for H in list_of_homography:
             h1, h2, h3 = H.T
-            Kinv = np.linalg.inv(K)
             lambda1 = 1.0 / np.linalg.norm(Kinv @ h1)
             lambda2 = 1.0 / np.linalg.norm(Kinv @ h2)
 

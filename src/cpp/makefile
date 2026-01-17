@@ -1,6 +1,6 @@
 # 编译器和编译选项
 CXX = g++
-CXXFLAGS = -O2 -I/usr/local/include/eigen3
+CXXFLAGS = -O2 -lgsl -lgslcblas -lm -I/usr/local/include/eigen3
 TARGET = SimulateCamera
 
 # 默认目标
