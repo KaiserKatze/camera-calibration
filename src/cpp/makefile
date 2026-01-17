@@ -1,6 +1,12 @@
-# 编译器和编译选项
+# 编译器
 CXX = g++
-CXXFLAGS = -std=gnu++17 -O2 -lgsl -lgslcblas -lm -I/usr/local/include/eigen3
+
+# 编译选项 (包含路径、优化级别、C++标准)
+CXXFLAGS = -std=gnu++17 -O2 -I/usr/local/include/eigen3
+
+# 链接选项 (库文件)
+LDLIBS = -lgsl -lgslcblas -lm
+
 TARGET = SimulateCamera
 
 # 默认目标
@@ -8,7 +14,7 @@ all: $(TARGET)
 
 # 编译目标
 $(TARGET): SimulateCamera.cpp
-	$(CXX) $(CXXFLAGS) $< -o $@
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 # 清理生成的文件
 clean:
