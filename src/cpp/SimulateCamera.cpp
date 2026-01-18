@@ -14,6 +14,13 @@
 #include <gsl/gsl_multifit_nlinear.h>
 #include <gsl/gsl_blas.h>
 
+// ==========================================
+//在此处控制是否校准 Gamma (Skew)
+// 1: 校准 Gamma
+// 0: 强制 Gamma = 0
+#define CALIBRATE_GAMMA 1
+// ==========================================
+
 #define CONSTANT_PI 3.14159265358979323846f
 #define ARG_INPUT
 #define ARG_OUTPUT
@@ -369,6 +376,11 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
             radialDistortionCoeffcients << 0.0f, 0.0f;
         }
 
+#if CALIBRATE_GAMMA == 0
+        // 如果禁用 Gamma，在初始猜测中强制置零
+        intrinsicMatrix(0, 1) = 0.0f;
+#endif
+
         Eigen::Matrix3f invIntrinsicMatrix = intrinsicMatrix.inverse();
 
         const auto approximate_rotation_matrix = [](Eigen::Matrix3f& mat) -> void {
@@ -400,8 +412,18 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         }
     }
 
-    // 参数数量
-    const size_t p = 7 + 6 * numViews;
+    // 参数数量计算
+    // 基础内参：alpha, beta, u0, v0 (4个)
+    // 可选内参：gamma (1个)
+    // 畸变：k1, k2 (2个)
+    // 外参：6 * numViews
+#if CALIBRATE_GAMMA == 1
+    const size_t numIntrinsicParams = 7; // alpha, gamma, u0, beta, v0, k1, k2
+#else
+    const size_t numIntrinsicParams = 6; // alpha, u0, beta, v0, k1, k2
+#endif
+    const size_t p = numIntrinsicParams + 6 * numViews;
+
     // 残差数量
     const size_t n = 2 * numPointsPerView * numViews;
 
@@ -413,15 +435,28 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
 
     // 初始化参数向量 x
     x = gsl_vector_alloc(p);
+
+#if CALIBRATE_GAMMA == 1
+    // 布局: [alpha, gamma, u0, beta, v0, k1, k2, extrinsics...]
     gsl_vector_set(x, 0, intrinsicMatrix(0, 0)); // alpha
     gsl_vector_set(x, 1, intrinsicMatrix(0, 1)); // gamma
     gsl_vector_set(x, 2, intrinsicMatrix(0, 2)); // u0
     gsl_vector_set(x, 3, intrinsicMatrix(1, 1)); // beta
     gsl_vector_set(x, 4, intrinsicMatrix(1, 2)); // v0
-    gsl_vector_set(x, 5, 0.0f);  // 初始畸变系数设为 0
-    gsl_vector_set(x, 6, 0.0f);
+    gsl_vector_set(x, 5, 0.0f);                  // k1
+    gsl_vector_set(x, 6, 0.0f);                  // k2
+#else
+    // 布局: [alpha, u0, beta, v0, k1, k2, extrinsics...]
+    gsl_vector_set(x, 0, intrinsicMatrix(0, 0)); // alpha
+    gsl_vector_set(x, 1, intrinsicMatrix(0, 2)); // u0
+    gsl_vector_set(x, 2, intrinsicMatrix(1, 1)); // beta
+    gsl_vector_set(x, 3, intrinsicMatrix(1, 2)); // v0
+    gsl_vector_set(x, 4, 0.0f);                  // k1
+    gsl_vector_set(x, 5, 0.0f);                  // k2
+#endif
+
     for (size_t i = 0; i < numViews; ++i) {
-        size_t base = 7 + i * 6;
+        size_t base = numIntrinsicParams + i * 6;
         gsl_vector_set(x, base + 0, rVecs[i].x());
         gsl_vector_set(x, base + 1, rVecs[i].y());
         gsl_vector_set(x, base + 2, rVecs[i].z());
@@ -442,6 +477,7 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         // 恢复上下文
         CalibrationContext* ctx = static_cast<CalibrationContext*>(params);
 
+#if CALIBRATE_GAMMA == 1
         float alpha = static_cast<float>(gsl_vector_get(x, 0));
         float gamma = static_cast<float>(gsl_vector_get(x, 1));
         float u0    = static_cast<float>(gsl_vector_get(x, 2));
@@ -449,6 +485,17 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         float v0    = static_cast<float>(gsl_vector_get(x, 4));
         float k1    = static_cast<float>(gsl_vector_get(x, 5));
         float k2    = static_cast<float>(gsl_vector_get(x, 6));
+        const size_t numIntrinsics = 7;
+#else
+        float alpha = static_cast<float>(gsl_vector_get(x, 0));
+        float gamma = 0.0f;
+        float u0    = static_cast<float>(gsl_vector_get(x, 1));
+        float beta  = static_cast<float>(gsl_vector_get(x, 2));
+        float v0    = static_cast<float>(gsl_vector_get(x, 3));
+        float k1    = static_cast<float>(gsl_vector_get(x, 4));
+        float k2    = static_cast<float>(gsl_vector_get(x, 5));
+        const size_t numIntrinsics = 6;
+#endif
 
         Eigen::Matrix3f iMat = MakeIntrinsicMatrix(alpha, beta, gamma, u0, v0);
         DistortFunctionBrownConrady distortFunction{ k1, k2 };
@@ -457,7 +504,7 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         size_t residualIdx = 0;
 
         for (size_t i = 0; i < ctx->numViews; ++i) {
-            size_t base = 7 + i * 6;
+            size_t base = numIntrinsics + i * 6;
             Eigen::Vector3f rVec{
                 static_cast<float>(gsl_vector_get(x, base + 0)),
                 static_cast<float>(gsl_vector_get(x, base + 1)),
@@ -538,6 +585,7 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
 
     // 4. 提取结果
     gsl_vector* x_opt = w->x; // 最优解
+#if CALIBRATE_GAMMA == 1
     intrinsicMatrix << static_cast<float>(gsl_vector_get(x_opt, 0)),
                        static_cast<float>(gsl_vector_get(x_opt, 1)),
                        static_cast<float>(gsl_vector_get(x_opt, 2)),
@@ -549,6 +597,19 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
                        1.0f;
     radialDistortionCoeffcients << static_cast<float>(gsl_vector_get(x_opt, 5)),
                                    static_cast<float>(gsl_vector_get(x_opt, 6));
+#else
+    intrinsicMatrix << static_cast<float>(gsl_vector_get(x_opt, 0)),
+                       0.0f,
+                       static_cast<float>(gsl_vector_get(x_opt, 1)),
+                       0.0f,
+                       static_cast<float>(gsl_vector_get(x_opt, 2)),
+                       static_cast<float>(gsl_vector_get(x_opt, 3)),
+                       0.0f,
+                       0.0f,
+                       1.0f;
+    radialDistortionCoeffcients << static_cast<float>(gsl_vector_get(x_opt, 4)),
+                                   static_cast<float>(gsl_vector_get(x_opt, 5));
+#endif
 
     double final_chi = gsl_blas_dnrm2(w->f);
     double final_rmse = std::sqrt(final_chi * final_chi / n);
