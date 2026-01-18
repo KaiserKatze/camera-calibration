@@ -2,6 +2,8 @@ import numpy as np
 import cv2
 import urllib.request
 import os
+import shutil
+
 
 # ==========================================
 # 1. 准备工作：下载数据
@@ -13,14 +15,22 @@ yml_name = 'left_intrinsics.yml'
 
 print("--- 步骤 1: 检查并下载数据 ---")
 
-def download_file(filename):
-    if not os.path.exists(filename):
+def download_file(filename, timeout_in_seconds=10):
+    filepath = os.path.join(os.getcwd(), filename)
+
+    if not os.path.exists(filepath):
         url = base_url_raw + filename
         print(f"正在下载: {filename} ...")
         try:
-            urllib.request.urlretrieve(url, filename)
+            with urllib.request.urlopen(url, timeout=timeout_in_seconds) as response, \
+                open(filepath, 'wb') as out_file:
+                # shutil.copyfileobj 会高效地将流从网络复制到文件
+                shutil.copyfileobj(response, out_file)
+                out_file.flush()
         except Exception as e:
             print(f"下载 {filename} 失败: {e}")
+            if os.path.exists(filepath):
+                os.remove(filepath)
             return False
     else:
         print(f'文件 {filename} 已存在，跳过 ...')
@@ -60,6 +70,7 @@ image_size = None
 valid_files_list = [] # 用于记录哪些图片成功提取了角点，方便后续读取
 
 for fname in file_names:
+    print(f'正在处理: {fname} ... ', end='')
     img = cv2.imread(fname)
     if img is None:
         continue
