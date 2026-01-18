@@ -13,6 +13,7 @@
 #include <gsl/gsl_matrix.h>
 #include <gsl/gsl_multifit_nlinear.h>
 #include <gsl/gsl_blas.h>
+#include <gsl/gsl_errno.h>
 
 // ==========================================
 //在此处控制是否校准 Gamma (Skew)
@@ -474,6 +475,12 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
     context.numViews = numViews;
 
     fdf_params = gsl_multifit_nlinear_default_parameters();
+
+    // 启用 Marquardt 缩放 (Levenberg-Marquardt scaling)
+    fdf_params.scale = gsl_multifit_nlinear_scale_more;
+    // 指定使用 Levenberg-Marquardt 算法
+    fdf_params.trs = gsl_multifit_nlinear_trs_lm;
+
     fdf.f = [](const gsl_vector* x, void* params, gsl_vector* f) -> int {
         // 恢复上下文
         CalibrationContext* ctx = static_cast<CalibrationContext*>(params);
@@ -550,6 +557,9 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
     // 初始化求解器
     gsl_multifit_nlinear_init(x, &fdf, w);
 
+    // 关闭 GSL 的默认错误处理程序（防止直接崩溃）
+    gsl_set_error_handler_off();
+
     // 3. 执行优化迭代
     int status;
     size_t iter = 0;
@@ -569,7 +579,10 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         iter++;
         status = gsl_multifit_nlinear_iterate(w);
 
+        // 如果出错，打印警告但不要退出程序，保留当前结果
         if (status) {
+            std::cerr << "[GSL Warning] Solver stopped early at iter " << iter
+                      << ": " << gsl_strerror(status) << std::endl;
             break;  // 发生错误
         }
 
