@@ -30,21 +30,13 @@ namespace Eigen {
     using MatrixX9f = Eigen::Matrix<float, Eigen::Dynamic, 9>;
 }
 
-struct InParams {
-    float alpha;
-    float beta;
-    float gamma;
-    float u0;
-    float v0;
-
-    Eigen::Matrix3f GetMatrix() const {
-        Eigen::Matrix3f inParamMat;  // 内参矩阵
-        inParamMat << alpha, gamma, u0,
-                      0.0f,  beta,  v0,
-                      0.0f,  0.0f,  1.0f;
-        return inParamMat;
-    }
-};
+Eigen::Matrix3f MakeIntrinsicMatrix(float alpha, float beta, float gamma, float u0, float v0) const {
+    Eigen::Matrix3f matInParams;  // 内参矩阵
+    matInParams << alpha, gamma, u0,
+                   0.0f,  beta,  v0,
+                   0.0f,  0.0f,  1.0f;
+    return matInParams;
+}
 
 struct ExParams {
     float rx;
@@ -456,7 +448,7 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         float k1    = static_cast<float>(gsl_vector_get(x, 5));
         float k2    = static_cast<float>(gsl_vector_get(x, 6));
 
-        Eigen::Matrix3f iMat = InParams{ alpha, beta, gamma, u0, v0 }.GetMatrix();
+        Eigen::Matrix3f iMat = MakeIntrinsicMatrix(alpha, beta, gamma, u0, v0);
         DistortFunctionBrownConrady distortFunction{ k1, k2 };
 
         // 全局残差索引
