@@ -392,9 +392,9 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
         };
 
         for (const Eigen::Matrix3f& matHomography : listHomography) {
-            const Eigen::Vector3f& h1 = matHomography.row(0);
-            const Eigen::Vector3f& h2 = matHomography.row(1);
-            const Eigen::Vector3f& h3 = matHomography.row(2);
+            const Eigen::Vector3f& h1 = matHomography.col(0);
+            const Eigen::Vector3f& h2 = matHomography.col(1);
+            const Eigen::Vector3f& h3 = matHomography.col(2);
             Eigen::Vector3f invKh1 = invIntrinsicMatrix * h1;
             Eigen::Vector3f invKh2 = invIntrinsicMatrix * h2;
             Eigen::Vector3f invKh3 = invIntrinsicMatrix * h3;
