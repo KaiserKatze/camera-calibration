@@ -8,8 +8,8 @@ docs/
 *.mat
 *.m
 *.docx
-
-
+*.yml
+*.txt
 
 
 # Byte-compiled / optimized / DLL files
