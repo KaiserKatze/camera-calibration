@@ -178,6 +178,7 @@ struct DistortFunctionBrownConrady : DistortFunction {
         }
         points.row(0) = nonhomo.row(0);
         points.row(1) = nonhomo.row(1);
+        points.row(2).setOnes();
     }
 
     virtual void DistortPoint(ARG_INPUT_OUTPUT Eigen::Vector2f& point) const override {
