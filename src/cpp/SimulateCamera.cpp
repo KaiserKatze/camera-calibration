@@ -17,8 +17,8 @@
 // ==========================================
 //在此处控制是否校准 Gamma (Skew)
 // 1: 校准 Gamma
-// 0: 强制 Gamma = 0
-#define CALIBRATE_GAMMA 1
+// 0: 强制 Gamma = 0.0f
+#define CALIBRATE_GAMMA 0
 // ==========================================
 
 #define CONSTANT_PI 3.14159265358979323846f
