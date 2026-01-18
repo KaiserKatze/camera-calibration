@@ -30,7 +30,7 @@ namespace Eigen {
     using MatrixX9f = Eigen::Matrix<float, Eigen::Dynamic, 9>;
 }
 
-Eigen::Matrix3f MakeIntrinsicMatrix(float alpha, float beta, float gamma, float u0, float v0) const {
+Eigen::Matrix3f MakeIntrinsicMatrix(float alpha, float beta, float gamma, float u0, float v0) {
     Eigen::Matrix3f matInParams;  // 内参矩阵
     matInParams << alpha, gamma, u0,
                    0.0f,  beta,  v0,
