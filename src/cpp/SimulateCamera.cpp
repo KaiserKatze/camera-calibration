@@ -4,6 +4,8 @@
 #include <string>
 #include <stdexcept>
 #include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <Eigen/SVD>
@@ -559,89 +561,130 @@ void ExtractIntrinsicParams(ARG_INPUT const std::vector<Eigen::Matrix3f>& listHo
     std::cout << "[Info] Linear initialization finished.\n";
 }
 
-// 模拟数据加载 (Placeholder)
+// 从 model.txt 读取数据
+// 文件格式：每行 x y z
 Eigen::Matrix3Xf LoadModelData(const char* pathData) {
-    // 实际项目中应读取文件
-    // 这里生成一个 10x14 的棋盘格模型点
-    int ni = 10, nj = 14;
-    float square_size = 1000.0f; // mm?
-    Eigen::Matrix3Xf modelPoints(3, ni * nj);
-    int col = 0;
-    for (int i = 0; i < ni; ++i) {
-        for (int j = 0; j < nj; ++j) {
-            modelPoints(0, col) = i * square_size;
-            modelPoints(1, col) = j * square_size;
-            modelPoints(2, col) = 1.0f;
-            col++;
+    std::ifstream fs(pathData);
+    if (!fs.is_open()) {
+        throw std::runtime_error(std::string("Failed to open model file: ") + pathData);
+    }
+
+    std::vector<float> coords;
+
+    {
+        float valCoord;
+        while (fs >> valCoord) {
+            coords.push_back(valCoord);
         }
     }
-    // 居中 (可选)
-    Eigen::Vector3f centroid = modelPoints.rowwise().mean();
-    modelPoints.row(0).array() -= centroid(0);
-    modelPoints.row(1).array() -= centroid(1);
 
-    // 重新排序逻辑需与 Python 一致，这里简化
+    if (coords.empty() || coords.size() % 3 != 0) {
+        throw std::runtime_error("Model file data format error or empty.");
+    }
+
+    auto numPoints = coords.size() / 3;
+    Eigen::Matrix3Xf modelPoints(3, numPoints);
+
+    for (int i = 0; i < numPoints; ++i) {
+        modelPoints(0, i) = coords[3 * i + 0];  // X
+        modelPoints(1, i) = coords[3 * i + 1];  // Y
+        modelPoints(2, i) = 1.0f;               // W
+    }
+
+    std::cout << "Loaded " << numPoints << " points from " << pathData << std::endl;
     return modelPoints;
 }
 
-// 模拟像素数据 (Placeholder)
-std::vector<Eigen::Matrix3Xf> LoadPixelData(const char* pathData, const Eigen::Matrix3Xf& model) {
-    // 实际项目中应读取像素坐标文件
-    // 这里简单通过一个预设的 K 和 RT 投影生成一些带噪声的数据用于测试代码连通性
+// 从 left*.txt 读取数据
+// 参数 model 仅用于校验点数是否一致
+std::vector<Eigen::Matrix3Xf> LoadPixelData(const Eigen::Matrix3Xf& model) {
     std::vector<Eigen::Matrix3Xf> pixelList;
+    auto expectedPoints = model.cols();
 
-    Eigen::Matrix3f K_GT;
-    K_GT << 1250, 0, 255,
-            0, 900, 255,
-            0, 0, 1;
+    // 我们假设文件名为 left01.txt 到 left14.txt
+    for (int i = 1; i <= 14; ++i) {
+        if (i == 10) {
+            continue;  // OpenCV 没有给提供 left10.jpg，因此也没有相应的 left10.txt
+        }
+        std::ostringstream ss;
+        ss << "left" << std::setw(2) << std::setfill('0') << i << ".txt";
+        std::string filename = ss.str();
+        std::ifstream fs(filename);
+        if (!fs.is_open()) {
+            std::cout << "Skipping missing file: " << filename << std::endl;
+            continue;
+        }
 
-    // 生成 3 个视图
-    for (int i = 0; i < 3; ++i) {
-        Eigen::Matrix3f R = Eigen::AngleAxisf(0.2f * (i+1), Eigen::Vector3f::UnitX()).toRotationMatrix();
-        Eigen::Vector3f t(0.0f, 0.0f, 60000.0f + i * 1000.0f);
+        std::vector<float> coords;
 
-        Eigen::Matrix3Xf pixelPoints(3, model.cols());
+        {
+            float valCoord;
+            while (fs >> valCoord) {
+                coords.push_back(valCoord);
+            }
+        }
 
-        // Project: pixelHomo = K * (R*X + t)
-        Eigen::Matrix3Xf cameraPoints = R * model;
-        cameraPoints.colwise() += t;
+        if (coords.size() % 2 != 0) {
+            std::cerr << "Warning: File " << filename << " has incomplete data points. Skipped." << std::endl;
+            continue;
+        }
 
-        // 归一化平面畸变 (这里模拟无畸变)
-        Eigen::Matrix2Xf normImgPoints(2, model.cols());
-        Homo2Nonhomo(cameraPoints, normImgPoints);
+        int numPoints = coords.size() / 2;
+        if (numPoints != expectedPoints) {
+            std::cerr << "Warning: File " << filename << " has " << numPoints
+                      << " points, but model has " << expectedPoints << ". Skipped." << std::endl;
+            continue;
+        }
 
-        // 再次齐次化去乘 K
-        Eigen::Matrix3Xf normImgPointsH;
-        Nonhomo2Homo(normImgPoints, normImgPointsH);
+        Eigen::Matrix3Xf pixelPoints(3, numPoints);
+        for (int k = 0; k < numPoints; ++k) {
+            pixelPoints(0, k) = coords[2 * k + 0]; // u
+            pixelPoints(1, k) = coords[2 * k + 1]; // v
+            pixelPoints(2, k) = 1.0f;              // w
+        }
 
-        pixelPoints = K_GT * normImgPointsH;
         pixelList.push_back(pixelPoints);
+        std::cout << "Loaded " << filename << std::endl;
     }
+
+    if (pixelList.empty()) {
+        throw std::runtime_error("No valid pixel data files found (left*.txt).");
+    }
+
     return pixelList;
 }
 
 int main() {
     std::cout << "Starting Zhang's Calibration C++ implementation...\n";
 
-    Eigen::Matrix3Xf modelPointsInWorldCoordinates = LoadModelData("models.txt");
-    std::vector<Eigen::Matrix3Xf> listPixelPointsInPixelCoordinates = LoadPixelData("pixels.txt", modelPointsInWorldCoordinates);
+    try {
+        // 读取真实模型数据
+        Eigen::Matrix3Xf modelPointsInWorldCoordinates = LoadModelData("model.txt");
 
-    std::vector<Eigen::Matrix3f> listHomography;
-    std::cout << "Inferring Homographies...\n";
-    for (const Eigen::Matrix3Xf& pixelPointsInPixelCoordinates : listPixelPointsInPixelCoordinates) {
-        listHomography.push_back(InferHomography(modelPointsInWorldCoordinates, pixelPointsInPixelCoordinates));
+        // 读取真实像素数据
+        std::vector<Eigen::Matrix3Xf> listPixelPointsInPixelCoordinates = LoadPixelData(modelPointsInWorldCoordinates);
+
+        std::vector<Eigen::Matrix3f> listHomography;
+        std::cout << "Inferring Homographies...\n";
+        for (const Eigen::Matrix3Xf& pixelPointsInPixelCoordinates : listPixelPointsInPixelCoordinates) {
+            listHomography.push_back(InferHomography(modelPointsInWorldCoordinates, pixelPointsInPixelCoordinates));
+        }
+
+        Eigen::Matrix3f intrinsicMatrix;
+        Eigen::Vector2f radialDistortionCoeffcients;
+
+        std::cout << "Extracting Intrinsics...\n";
+        ExtractIntrinsicParams(listHomography, modelPointsInWorldCoordinates, listPixelPointsInPixelCoordinates, intrinsicMatrix, radialDistortionCoeffcients);
+
+        std::cout << "------------------------------------------\n"
+                  << "Estimated Intrinsic Matrix (K):\n" << intrinsicMatrix << std::endl
+                  << "Estimated Radial Distortion Coefficients:\n" << radialDistortionCoeffcients.transpose() << std::endl
+                  << "------------------------------------------\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return -1;
     }
-
-    Eigen::Matrix3f intrinsicMatrix;
-    Eigen::Vector2f radialDistortionCoeffcients;
-
-    std::cout << "Extracting Intrinsics...\n";
-    ExtractIntrinsicParams(listHomography, modelPointsInWorldCoordinates, listPixelPointsInPixelCoordinates, intrinsicMatrix, radialDistortionCoeffcients);
-
-    std::cout << "------------------------------------------\n"
-        << "Estimated Intrinsic Matrix (K):\n" << intrinsicMatrix << std::endl
-        << "Estimated Radial Distortion Coefficients:\n" << radialDistortionCoeffcients.transpose() << std::endl
-        << "------------------------------------------\n";
 
     return 0;
 }
