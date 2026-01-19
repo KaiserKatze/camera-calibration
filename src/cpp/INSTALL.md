@@ -49,20 +49,21 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-a
 sudo apt-get update -y
 sudo apt-get upgrade -y
 UBUNTU_CODENAME=$(lsb_release -c | awk '{NR>1}{print $2}')
+ROS_VERSION=""
 if [ "$UBUNTU_CODENAME" -eq "noble" ]; then
-    echo "Install ros-jazzy-desktop for Ubuntu $UBUNTU_CODENAME ..."
-    sudo apt-get install -y ros-jazzy-desktop
+    ROS_VERSION="jazzy"
 elif [ "$UBUNTU_CODENAME" -eq "jammy" ]; then
-    sudo apt-get install -y ros-humble-desktop
-    echo "Install ros-humble-desktop for Ubuntu $UBUNTU_CODENAME ..."
+    ROS_VERSION="humble"
 else
     echo "No suitable ros desktop version found!"
     exit 1
 fi
+echo "Install ros-$ROS_VERSION-desktop for Ubuntu $UBUNTU_CODENAME ..."
+sudo apt-get install -y ros-$ROS_VERSION-desktop
 
 # 设置环境变量
-source /opt/ros/humble/setup.bash
-echo "source /opt/ros/humble/setup.bash" >> /home/ros/.profile
+source /opt/ros/$ROS_VERSION/setup.bash
+echo "source /opt/ros/$ROS_VERSION/setup.bash" >> /home/ros/.profile
 # 测试1（消息的发布和订阅）
 ros2 run demo_nodes_cpp talker          # 启动一个数据发布者节点
 ros2 run demo_nodes_py listener         # 启动一个数据订阅者节点
