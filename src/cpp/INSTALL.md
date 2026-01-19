@@ -39,8 +39,8 @@ sudo export LANG=en_US.UTF-8
 echo "export LANG=en_US.UTF-8">> /home/ros/.profile
 
 # 添加镜像源
-apt-get install -y curl gnupg lsb-release
-curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+sudo apt-get install -y curl gnupg lsb-release
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
     -o /usr/share/keyrings/ros-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(source /etc/os-release && echo $UBUNTU_CODENAME) main" | \
     sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
@@ -64,6 +64,11 @@ sudo apt-get install -y ros-$ROS_VERSION-desktop
 # 设置环境变量
 source /opt/ros/$ROS_VERSION/setup.bash
 echo "source /opt/ros/$ROS_VERSION/setup.bash" >> /home/ros/.profile
+
+#===========================================================
+# 测试 ROS
+# 在进行以下两个测试之前，需要首先登出当前用户，重新以 ros 用户的身份登录，否则测试2无法打开海龟仿真器
+
 # 测试1（消息的发布和订阅）
 ros2 run demo_nodes_cpp talker          # 启动一个数据发布者节点
 ros2 run demo_nodes_py listener         # 启动一个数据订阅者节点
