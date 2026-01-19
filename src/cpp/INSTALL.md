@@ -46,11 +46,19 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-a
     sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
 
 # 安装 ROS2
-UBUNTU_CODENAME=$(lsb_release -c | awk '{NR>1}{print $2}')
 sudo apt-get update -y
 sudo apt-get upgrade -y
-
-sudo apt-get install -y ros-humble-desktop
+UBUNTU_CODENAME=$(lsb_release -c | awk '{NR>1}{print $2}')
+if [ "$UBUNTU_CODENAME" -eq "noble" ]; then
+    echo "Install ros-jazzy-desktop for Ubuntu $UBUNTU_CODENAME ..."
+    sudo apt-get install -y ros-jazzy-desktop
+elif [ "$UBUNTU_CODENAME" -eq "jammy" ]; then
+    sudo apt-get install -y ros-humble-desktop
+    echo "Install ros-humble-desktop for Ubuntu $UBUNTU_CODENAME ..."
+else
+    echo "No suitable ros desktop version found!"
+    exit 1
+fi
 
 # 设置环境变量
 source /opt/ros/humble/setup.bash
