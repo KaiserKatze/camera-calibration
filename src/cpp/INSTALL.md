@@ -4,6 +4,7 @@
 EIGEN_VERSION=5.0.1
 
 apt-get update -y
+apt-get upgrade -y
 apt-get install -y \
     cmake build-essentials \
     libgsl-dev \
@@ -19,4 +20,45 @@ mkdir build
 cd build
 cmake ..
 make install
+
+#===========================================================
+# 安装 ROS
+
+# 新建 ros 用户
+useradd -m -d "/home/ros" -s "/bin/bash" \
+    --comment "pseudo-user" "ros"
+passwd -l ros
+chown -R ros:ros ${HBASE_HOME}
+chown -R ros:ros /home/ros
+
+# 修改编码方式
+apt-get install -y locales \
+    && locale-gen en_US en_US.UTF-8 \
+    && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
+    && export LANG=en_US.UTF-8 \
+    && echo "export LANG=en_US.UTF-8">> /home/ros/.profile
+
+# 添加镜像源
+apt-get install -y curl gnupg lsb-release
+curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(source /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+
+# 安装 ROS2
+apt-get update -y
+apt-get upgrade -y
+apt-get install -y ros-humble-desktop
+
+# 设置环境变量
+source /opt/ros/humble/setup.bash
+echo "source /opt/ros/humble/setup.bash" >> /home/ros/.profile
+# 测试1（消息的发布和订阅）
+ros2 run demo_nodes_cpp talker          # 启动一个数据发布者节点
+ros2 run demo_nodes_py listener         # 启动一个数据订阅者节点
+# 如果“Hello World”字符串在两个终端中正常传输，说明通信系统没有问题
+
+# 测试2（小海龟仿真器）
+ros2 run turtlesim turtlesim_node       # 启动一个蓝色背景的海龟仿真器
+ros2 run turtlesim turtle_teleop_key    # 启动一个键盘控制节点
+# 在终端中点击键盘上的“上下左右”按键，就可以控制小海龟运动啦
 ```
