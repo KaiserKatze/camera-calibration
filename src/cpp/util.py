@@ -9,6 +9,9 @@ import shutil
 # 1. 准备工作：下载数据
 # ==========================================
 
+# @see: https://github.com/opencv/opencv/blob/master/samples/data/left01.jpg
+# @see: https://github.com/opencv/opencv/blob/master/samples/data/left_intrinsics.yml
+
 base_url_raw = "https://raw.githubusercontent.com/opencv/opencv/refs/heads/master/samples/data/"
 file_names = [f'left{i:02d}.jpg' for i in range(1, 15) if i != 10]
 yml_name = 'left_intrinsics.yml'

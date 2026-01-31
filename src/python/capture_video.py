@@ -7,7 +7,8 @@ import time
 import os
 
 if __name__ == '__main__':
-    os.mkdir('calibration_images', exist_ok=True)
+    if not os.path.exists('calibration_images'):
+        os.mkdir('calibration_images')
 
     cv.namedWindow('video', cv.WINDOW_NORMAL)
     cap = cv.VideoCapture(0)
